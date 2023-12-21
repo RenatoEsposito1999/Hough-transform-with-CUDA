@@ -5,7 +5,7 @@
 
 
 int main() {
-    cv::Mat input = cv::imread("foto.jpg", cv::IMREAD_COLOR);
+    cv::Mat input = cv::imread("foto.jpg", cv::IMREAD_ANYCOLOR);
 
     if (input.empty()) {
         fprintf(stderr, "Impossibile caricare l'immagine\n");

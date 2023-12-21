@@ -19,6 +19,7 @@ fi
 # Esegui il comando nvcc per compilare il file .cu e cattura gli errori
 if errors=$(nvcc "$input_file" -o "$output_executable" -lopencv_core -lopencv_highgui -lopencv_imgcodecs -lopencv_imgproc -lopencv_cudaimgproc -lopencv_cudawarping -lopencv_cudaarithm -lopencv_cudafilters -lopencv_cudafeatures2d -lopencv_cudaobjdetect -lopencv_cudabgsegm -lopencv_cudastereo -lopencv_cudev -lcudart -lnppicom -lnppidei -lnppif -lnppig -lnppim -lnppist -lnppisu -lnppitc -lnpps -lcufft -lnvrtc -lnvcuvid -lcudart -lpthread -lm -ldl 2>&1); then
     echo "Compilazione completata con successo. Eseguibile creato: $output_executable"
+    echo "Esecuzione in corso..."
     ./"$output_executable"
 else
     echo "Errore durante la compilazione:"
