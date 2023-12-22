@@ -15,19 +15,22 @@ cv::Mat gpu_RGBtoGRAYSCALE(cv::Mat);
 int main() {
     cv::Mat cpu_outputGrayScale;
     cv::Mat gpu_outputGrayScale;
+
+    //Read the input image
     cv::Mat input = cv::imread("foto.jpg");
 
     if (input.empty()) {
-        fprintf(stderr, "Impossibile caricare l'immagine\n");
+        fprintf(stderr, "Unable to load image\n");
         return -1;
     }
     
+    //RGB to Grayscale function (CPU)
     cpu_outputGrayScale = cpu_RGBtoGRAYSCALE(input);
     
-    cv::imwrite("GrayscaleImageCPU.jpg",cpu_outputGrayScale);
-    
+    //RGB to Grayscale function (GPU)
     gpu_outputGrayScale = gpu_RGBtoGRAYSCALE(input);
     
+    //Saving to disk
     cv::imwrite("GrayscaleImageGPU.jpg",gpu_outputGrayScale);
 
     /*
@@ -56,17 +59,29 @@ int main() {
     return 0;
 }
 
+//Converting RGB to Grayscale using OpenCV (CPU)
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat in){
+    //Output image
     cv::Mat out;
+    //BGR to Grayscale
     cv::cvtColor(in,out,cv::COLOR_BGR2GRAY);
     return out;
 }
 
+//Converting RGB to Grayscale using OpenCV for CUDA (GPU)
 cv::Mat gpu_RGBtoGRAYSCALE(cv::Mat in){
+    //Output image
     cv::Mat out;
+    
+    //Grayscale image on GPU
     cv::cuda::GpuMat gray;
+
+    //Loading of the image from the cpu to gpu
     cv::cuda::GpuMat gpuImage(in);
+    //BGR to Grayscale
     cv::cuda::cvtColor(gpuImage,gray,cv::COLOR_BGR2GRAY);
+
+    //Download from gpu to cpu
     gray.download(out);
 
     return out;
