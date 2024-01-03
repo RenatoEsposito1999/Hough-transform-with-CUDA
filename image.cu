@@ -31,7 +31,8 @@ int main() {
     gpu_outputGrayScale = gpu_RGBtoGRAYSCALE(input);
     
     //Saving to disk
-    cv::imwrite("GrayscaleImageGPU.jpg",gpu_outputGrayScale);
+    //cv::imwrite("GrayscaleImageGPU.jpg",gpu_outputGrayScale);
+    cv::imshow("GrayscaleImageGPU", gpu_outputGrayScale);
 
     /*
     // Trasferisci l'immagine sulla memoria GPU
