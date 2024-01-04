@@ -33,6 +33,6 @@ To run and test the code you will need:
 - [mail] renato [ dot ] esposito001 [ at ] studenti [ dot ] uniparthenope [ dot ] it (you can write to me in english or italian).
 
 ## To do List
-- [X] Write C code for histogram equalization.
-- [X] Write Cuda kernel code for histogram equalization. 
-- [X] Add Gaussian filter with both CPU and GPU.
+- [ ] Write C code for histogram equalization.
+- [ ] Write Cuda kernel code for histogram equalization. 
+- [ ] Add Gaussian filter with both CPU and GPU.
