@@ -4,7 +4,6 @@ This project is the result of the **High Performance Computing** exam of the Mas
 
 
 ## Goal
-***
 The final objective of this project is to learn the main notions of parallelization on GPUs in particular using the **CUDA** environment; to do this we decided to solve some problems that can be solved more efficiently on GPU.
 In the case of this repository the objective is to apply the Hough Transform to identify the lines.
 
@@ -16,6 +15,12 @@ The **idea** is to apply some preprocessing operations before carrying out the a
 
 <u>*Operations are performed on both CPU and GPU for comparison purposes*</u>
 
-## Contacts 🪪
+## Tools 🛠
 ***
+- [Cuda]((https://developer.nvidia.com/cuda-toolkit))
+- [C](https://en.wikipedia.org/wiki/C_(programming_language))
+- [OpenCV]((https://opencv.org/))
+- [OpenCV for Cuda](https://opencv.org/platforms/cuda/)
+
+## Contacts 🪪
 - [mail] renato [ dot ] esposito001 [ at ] studenti [ dot ] uniparthenope [ dot ] it (you can write to me in english or italian).
