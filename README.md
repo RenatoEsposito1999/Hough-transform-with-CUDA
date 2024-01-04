@@ -15,8 +15,14 @@ The **idea** is to apply some preprocessing operations before carrying out the a
 
 <u>*Operations are performed on both CPU and GPU for comparison purposes*</u>
 
+## Instructions 🚀
+To run and test the code you will need:
+- Download the repository.
+- Through the terminal go to the local folder where the downloaded repository is located.
+- Run the command './compile.sh image.cu out'
+- The program will start automatically, for a new execution it will not be necessary to use the compile.sh file but simply execute the './out' command
+**N.B**: <u>to run the software a local installation of OpenCV and OpenCV for cuda is required, therefore an Nvidia graphics card is required. <\u>
 ## Tools 🛠
-***
 - [Cuda](https://developer.nvidia.com/cuda-toolkit)
 - [C](https://en.wikipedia.org/wiki/C_(programming_language) )
 - [OpenCV](https://opencv.org/)
