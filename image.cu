@@ -11,13 +11,12 @@ comparare.*/
 /*Al momento ho fatto la prima operazione di preprocessing cioè la trasformazione in scala di grigio e l'ho fatta usando l'operazione sia su CPU che GPU,
 in entrambi i casi ho usato la libreari quindi sono comparabili.*/
 
-/*Prossimo step: prendere i tempi e stamparli*/
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat);
 cv::Mat gpu_RGBtoGRAYSCALE(cv::Mat);
+cv::Mat cpu_resizeImage(cv::Mat,cv::Size);
 
 int main() {
-    cv::Mat cpu_outputGrayScale;
-    cv::Mat gpu_outputGrayScale;
+    cv::Mat cpu_outputGrayScale, gpu_outputGrayScale, gpu_resizedImage, cpu_resizedImage;
     cudaEvent_t Start, Stop;
     //Read the input image
     cv::Mat input = cv::imread("foto.jpg");
@@ -47,9 +46,34 @@ int main() {
     cudaEventSynchronize(Stop);
     cudaEventElapsedTime(&elapsedTime, Start, Stop);
     printf("Execution time on GPU: %f msec\n", elapsedTime);
+
+    elapsedTime=0;
+    cudaEventRecord(Start, 0);
+    //Resize on CPU with GPU image as input
+    cpu_resizedImage=cpu_resizeImage(gpu_outputGrayScale,cv::Size(600,600));
+    cudaEventRecord(Stop, 0);
+    cudaEventSynchronize(Stop);
+    cudaEventElapsedTime(&elapsedTime, Start, Stop);
+    printf("[Resize] Execution time on CPU: %f msec\n", elapsedTime);
+
+
+    //Ora devo fare la stessa cosa ma farla sulla GPU ricordando di caricare l'immagine etc.
+
+    cv::imshow("Original size", gpu_outputGrayScale);
+    cv::imshow("Resized 600x600", cpu_resizedImage);
+    cv::waitKey(0);
+
+    cudaEventDestroy(Start);
+    cudaEventDestroy(Stop);
     return 0;
 }
 
+//Resize of the image using OpenCV (CPU)
+cv::Mat cpu_resizeImage(cv::Mat in,cv::Size size){
+    cv::Mat out;
+    cv::resize(in, out, size);
+    return out;
+}
 //Converting RGB to Grayscale using OpenCV (CPU)
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat in){
     //Output image
