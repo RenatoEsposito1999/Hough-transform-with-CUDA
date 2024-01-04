@@ -68,18 +68,11 @@ int main(int argn, char *argv[]) {
     cudaEventElapsedTime(&elapsedTime, Start, Stop);
     printf("[Resize] Execution time on CPU: %f msec\n", elapsedTime);
 
-
-    elapsedTime=0;
-    cudaEventRecord(Start, 0);
     gpu_resizedImage= gpu_resizeImage(gpu_grayscaleImage,size);
-    cudaEventRecord(Stop, 0);
-    cudaEventSynchronize(Stop);
-    cudaEventElapsedTime(&elapsedTime, Start, Stop);
-    printf("[Resize] Execution time on GPU: %f msec\n", elapsedTime);
 
+
+    cv::imshow("Input image", input);
     
-    
-    //cv::imshow("Input image", input);
     gpu_resizedImage.download(output);
     cv::imshow("Resized and converted to grayscale image", output);
     cv::waitKey(0);
