@@ -12,12 +12,20 @@ comparare.*/
 in entrambi i casi ho usato la libreari quindi sono comparabili.*/
 
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat);
-cv::Mat gpu_RGBtoGRAYSCALE(cv::Mat);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size);
 
-int main() {
-    cv::Mat cpu_outputGrayScale, gpu_outputGrayScale, gpu_resizedImage, cpu_resizedImage;
+cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat);
+cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size);
+
+//cv::Mat metodoHough è l'unico che ritorna l'output finale.
+
+int main(int argn, char *argv[]) {
+    cv::Mat cpu_grayscaleImage, cpu_resizedImage;
+    cv::cuda::GpuMat gpu_grayscaleImage, gpu_resizedImage;
+    cv::Mat output; //Final output image (downloaded from GPU)
     cudaEvent_t Start, Stop;
+    cv::cuda::GpuMat gpuImage;
+    cv::Size size(600,600);
     //Read the input image
     cv::Mat input = cv::imread("foto.jpg");
 
@@ -25,48 +33,63 @@ int main() {
         fprintf(stderr, "Unable to load image\n");
         return -1;
     }
+
+    //Loading of the image from the cpu to gpu
+    gpuImage.upload(input);
+    
     //Time measurement CPU
     cudaEventCreate(&Start);
     cudaEventCreate(&Stop);
     cudaEventRecord(Start, 0);
     //RGB to Grayscale function (CPU)
-    cpu_outputGrayScale = cpu_RGBtoGRAYSCALE(input);
+    cpu_grayscaleImage = cpu_RGBtoGRAYSCALE(input);
     cudaEventRecord(Stop, 0);
     cudaEventSynchronize(Stop);
     float elapsedTime;
     cudaEventElapsedTime(&elapsedTime, Start, Stop);
-    printf("Execution time on CPU: %f msec\n", elapsedTime);
+    printf("[RGB to Grayscale] Execution time on CPU: %f msec\n", elapsedTime);
 
     elapsedTime=0;
     //Time measurement GPU
     cudaEventRecord(Start, 0);
     //RGB to Grayscale function (GPU)
-    gpu_outputGrayScale = gpu_RGBtoGRAYSCALE(input);
+    gpu_grayscaleImage = gpu_RGBtoGRAYSCALE(gpuImage);
     cudaEventRecord(Stop, 0);
     cudaEventSynchronize(Stop);
     cudaEventElapsedTime(&elapsedTime, Start, Stop);
-    printf("Execution time on GPU: %f msec\n", elapsedTime);
+    printf("[RGB to Grayscale] Execution time on GPU: %f msec\n", elapsedTime);
 
     elapsedTime=0;
     cudaEventRecord(Start, 0);
     //Resize on CPU with GPU image as input
-    cpu_resizedImage=cpu_resizeImage(gpu_outputGrayScale,cv::Size(600,600));
+    cpu_resizedImage=cpu_resizeImage(cpu_grayscaleImage,size);
     cudaEventRecord(Stop, 0);
     cudaEventSynchronize(Stop);
     cudaEventElapsedTime(&elapsedTime, Start, Stop);
     printf("[Resize] Execution time on CPU: %f msec\n", elapsedTime);
 
 
-    //Ora devo fare la stessa cosa ma farla sulla GPU ricordando di caricare l'immagine etc.
+    elapsedTime=0;
+    cudaEventRecord(Start, 0);
+    gpu_resizedImage= gpu_resizeImage(gpu_grayscaleImage,size);
+    cudaEventRecord(Stop, 0);
+    cudaEventSynchronize(Stop);
+    cudaEventElapsedTime(&elapsedTime, Start, Stop);
+    printf("[Resize] Execution time on GPU: %f msec\n", elapsedTime);
 
-    cv::imshow("Original size", gpu_outputGrayScale);
-    cv::imshow("Resized 600x600", cpu_resizedImage);
+    
+    
+    //cv::imshow("Input image", input);
+    gpu_resizedImage.download(output);
+    cv::imshow("Resized and converted to grayscale image", output);
     cv::waitKey(0);
 
     cudaEventDestroy(Start);
     cudaEventDestroy(Stop);
     return 0;
 }
+
+
 
 //Resize of the image using OpenCV (CPU)
 cv::Mat cpu_resizeImage(cv::Mat in,cv::Size size){
@@ -83,25 +106,20 @@ cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat in){
     return out;
 }
 
+
 //Converting RGB to Grayscale using OpenCV for CUDA (GPU)
-cv::Mat gpu_RGBtoGRAYSCALE(cv::Mat in){
-    //Output image
-    cv::Mat out;
-    
-    //Grayscale image on GPU
-    cv::cuda::GpuMat gray;
-
-    //Loading of the image from the cpu to gpu
-    cv::cuda::GpuMat gpuImage(in);
+cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat gpuImage){
+    cv::cuda::GpuMat out;
     //BGR to Grayscale
-    cv::cuda::cvtColor(gpuImage,gray,cv::COLOR_BGR2GRAY);
-
-    //Download from gpu to cpu
-    gray.download(out);
-
+    cv::cuda::cvtColor(gpuImage,out,cv::COLOR_BGR2GRAY);
     return out;
 }
 
+cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size){
+    cv::cuda::GpuMat out;
+    cv::cuda::resize(gpuImage, out, size);
+    return out;
+}
 
     /*
 
