@@ -17,9 +17,9 @@ The **idea** is to apply some preprocessing operations before carrying out the a
 
 ## Tools 🛠
 ***
-- [Cuda]((https://developer.nvidia.com/cuda-toolkit))
-- [C](https://en.wikipedia.org/wiki/C_(programming_language))
-- [OpenCV]((https://opencv.org/))
+- [Cuda](https://developer.nvidia.com/cuda-toolkit)
+- [C](https://en.wikipedia.org/wiki/C_(programming_language) )
+- [OpenCV](https://opencv.org/)
 - [OpenCV for Cuda](https://opencv.org/platforms/cuda/)
 
 ## Contacts 🪪
