@@ -10,27 +10,26 @@
 /*N.B: non posso comparare un metodo di libreria con un metodo eseguito a mano quindi o comparo due metodi di libreria o scrivo sia sequenziale che kernel per
 comparare.*/
 //N.B al momento l'operazione da parallelizzare è l'equalizzazione e non il calcolo dell'istogramma eventualmente
-//domando alla prof se devo fare pure quello. 
-/* Prossima cosa da fare:
-    Devo dedicarmi all'istogramma quindi l'obiettivo è [CON METODI OPENCV2]calcolare e visualizzare l'istogramma 
-    dell'ultima immagine ottenuta dal preprocessing CPU, equalizzo e visualizzo l'immagine equalizzata e originale
-    Dopo di questo devo scrivere il codice CPU io, faccio il passo di prima per capire qual'è l'output dell'operazione.
-    Dopodiché fatto con la CPU devo scrivere codice cuda kernel per fare l'operazione di equalizzazione.
+//domando alla prof se devo fare pure quello.
+
+/*
+    Prossima cosa da fare: Equalizzazione dell'istogramma su GPU. 
 */
 
+cv::Mat calcHist(cv::Mat);
+
+cv::Mat cpu_equalization(cv::Mat, float*);
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
-cv::Mat cpu_calcHist(cv::Mat, float*);
 
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat, cudaEvent_t*, float&);
 cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size, cudaEvent_t*, float&);
-cv::cuda::GpuMat gpu_calcHist(cv::cuda::GpuMat ,cudaEvent_t* , float& );
 
 //cv::Mat metodoHough è l'unico che ritorna l'output finale.
 
 int main(int argn, char *argv[]) {
     //Variables
-    cv::Mat cpu_grayscaleImage, cpu_resizedImage, cpu_Hist;
+    cv::Mat cpu_grayscaleImage, cpu_resizedImage, cpu_Hist, cpu_equalizedImage;
     cv::cuda::GpuMat gpu_grayscaleImage, gpu_resizedImage, gpu_Hist;
     cv::Mat output; //Final output image (downloaded from GPU)
     cudaEvent_t timer[2];
@@ -60,19 +59,24 @@ int main(int argn, char *argv[]) {
     gpu_grayscaleImage = gpu_RGBtoGRAYSCALE(gpuImage, timer, GPUelapsedTime);
     printf("[RGB to Grayscale] Execution time on GPU: %f msec\n", GPUelapsedTime);
 
-    //Resize on CPU with GPU image as input
+    //Resize on CPU with CPU image as input
     cpu_resizedImage=cpu_resizeImage(cpu_grayscaleImage,size, &CPUelapsedTime);
     printf("[Resize] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
+    //Resize on GPU
     gpu_resizedImage= gpu_resizeImage(gpu_grayscaleImage,size, timer, GPUelapsedTime);
     printf("[Resize] Execution time on GPU: %f msec\n", GPUelapsedTime);
 
-    cpu_Hist = cpu_calcHist(cpu_grayscaleImage, &CPUelapsedTime);
-    printf("[Histogram Calculation] Execution time on CPU: %f msec\n", CPUelapsedTime);
+    //Equalization on CPU
+    cpu_equalizedImage = cpu_equalization( cpu_resizedImage , &CPUelapsedTime);
+    printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
-    gpu_Hist = gpu_calcHist(gpu_resizedImage, timer, GPUelapsedTime);
-    printf("[Histogram Calculation] Execution time on GPU: %f msec\n", GPUelapsedTime);
- 
+    cv::imwrite("Input of Equalization.jpg", cpu_resizedImage);
+    cv::imwrite("Output_by_myself.jpg", cpu_equalizedImage);
+
+    //Equalization on GPU
+
+
     //cv::imshow("Input image", input);
     //gpu_resizedImage.download(output);
     //cv::imshow("Resized and converted to grayscale image", output);
@@ -84,24 +88,51 @@ int main(int argn, char *argv[]) {
     return 0;
 }
 
+//Histogram computation
+cv::Mat calcHist(cv::Mat image){
+    int histSize = 256;
 
-//Histogram calculation by using OpenCV routine, return the hist and not the image of the hist.
-cv::Mat cpu_calcHist(cv::Mat image, float *elapsedTime){
-    struct timespec start_time, end_time;
-    cv::Mat hist, hist_image; //hist_image is the graphical rappresentation of hist.
-    int histSize = 256;  // Bin's number
-    float range[] = {0, 256};  // Range pixel value
-    const float* histRange = {range};
-    bool uniform = true;
-    bool accumulate = false;
+    //Histogram calculation
+    cv::Mat hist = cv::Mat::zeros(1, histSize, CV_32F);
+    for (int i = 0; i < image.rows; ++i) {
+        for (int j = 0; j < image.cols; ++j) {
+            int pixel_value = static_cast<int>(image.at<uchar>(i, j));
+            hist.at<float>(pixel_value)++;
+        }
+    }
+
+    //Cumulative histogram
+    cv::Mat cumulative_hist = hist.clone();
+    for (int i = 1; i < histSize; ++i)
+        cumulative_hist.at<float>(i) += cumulative_hist.at<float>(i - 1);
     
+    //Normalization between 0-1
+    cumulative_hist /= image.total();
+
+    return cumulative_hist;
+}
+
+//Histogram equalization on CPU
+cv::Mat cpu_equalization(cv::Mat image, float *elapsedTime){
+    struct timespec start_time, end_time;
+    cv::Mat equalizedImage = image.clone();
+    cv::Mat cumulative_hist;
+    float range[] = { 0, 256 };
+
     clock_gettime(CLOCK_MONOTONIC, &start_time);
-    cv::calcHist(&image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, uniform, accumulate);
-    //Histogram normalization with values between 0 and 1 with MinMax method, no masks
-    cv::normalize(hist, hist, 0, 1, cv::NORM_MINMAX, -1, cv::Mat());
+    //Histogram Computation
+    cumulative_hist = calcHist(image);
+    //Equalization
+    for (int i = 0; i < image.rows; ++i) {
+        for (int j = 0; j < image.cols; ++j) {
+            int pixel_value = static_cast<int>(image.at<uchar>(i, j));
+            equalizedImage.at<uchar>(i, j) = cv::saturate_cast<uchar>(cumulative_hist.at<float>(pixel_value) * 255.0); //sature_cast is used to guarantee values between 0-255
+        }
+    }
     clock_gettime(CLOCK_MONOTONIC, &end_time);
     *elapsedTime = (end_time.tv_sec - start_time.tv_sec) * 1000.0 + (end_time.tv_nsec - start_time.tv_nsec) / 1000000.0;
-    return hist;
+    
+    return equalizedImage;
 }
 
 //Resize of the image using OpenCV (CPU)
@@ -155,17 +186,4 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaE
     //Elapsed time calculation
     cudaEventElapsedTime(&elapsedTime, timer[0], timer[1]);
     return out;
-}
-
-cv::cuda::GpuMat gpu_calcHist(cv::cuda::GpuMat gpuImage,cudaEvent_t* timer, float& elapsedTime){
-    cv::cuda::GpuMat hist;
-    //Timer's start
-    cudaEventRecord(timer[0], 0);
-    cv::cuda::calcHist(gpuImage, hist);
-    //Timer's end
-    cudaEventRecord(timer[1], 0);
-    cudaEventSynchronize(timer[1]);
-    //Elapsed time calculation
-    cudaEventElapsedTime(&elapsedTime, timer[0], timer[1]);
-    return hist;
 }
