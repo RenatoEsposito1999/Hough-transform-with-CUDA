@@ -96,7 +96,7 @@ cv::Mat calcHist(cv::Mat image){
     cv::Mat hist = cv::Mat::zeros(1, histSize, CV_32F);
     for (int i = 0; i < image.rows; ++i) {
         for (int j = 0; j < image.cols; ++j) {
-            int pixel_value = static_cast<int>(image.at<uchar>(i, j));
+            int pixel_value = static_cast<int>(image.at<uchar>(i*image.cols+j));
             hist.at<float>(pixel_value)++;
         }
     }
@@ -125,8 +125,8 @@ cv::Mat cpu_equalization(cv::Mat image, float *elapsedTime){
     //Equalization
     for (int i = 0; i < image.rows; ++i) {
         for (int j = 0; j < image.cols; ++j) {
-            int pixel_value = static_cast<int>(image.at<uchar>(i, j));
-            equalizedImage.at<uchar>(i, j) = cv::saturate_cast<uchar>(cumulative_hist.at<float>(pixel_value) * 255.0); //sature_cast is used to guarantee values between 0-255
+            int pixel_value = static_cast<int>(image.at<uchar>(i*image.cols+j));
+            equalizedImage.at<uchar>(i*image.cols+j) = cv::saturate_cast<uchar>(cumulative_hist.at<float>(pixel_value) * 255.0); //sature_cast is used to guarantee values between 0-255
         }
     }
     clock_gettime(CLOCK_MONOTONIC, &end_time);
