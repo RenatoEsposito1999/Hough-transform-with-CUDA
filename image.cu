@@ -8,10 +8,14 @@
 
 /*N.B: non posso comparare un metodo di libreria con un metodo eseguito a mano quindi o comparo due metodi di libreria o scrivo sia sequenziale che kernel per
 comparare.*/
-
-/*Al momento ho fatto la prima operazione di preprocessing cioè la trasformazione in scala di grigio e l'ho fatta usando l'operazione sia su CPU che GPU,
-in entrambi i casi ho usato la libreari quindi sono comparabili.*/
-
+//N.B al momento l'operazione da parallelizzare è l'equalizzazione e non il calcolo dell'istogramma eventualmente
+//domando alla prof se devo fare pure quello. 
+/* Prossima cosa da fare:
+    Devo dedicarmi all'istogramma quindi l'obiettivo è [CON METODI OPENCV2]calcolare e visualizzare l'istogramma 
+    dell'ultima immagine ottenuta dal preprocessing CPU, equalizzo e visualizzo l'immagine equalizzata e originale
+    Dopo di questo devo scrivere il codice CPU io, faccio il passo di prima per capire qual'è l'output dell'operazione.
+    Dopodiché fatto con la CPU devo scrivere codice cuda kernel per fare l'operazione di equalizzazione.
+*/
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
 
@@ -60,6 +64,7 @@ int main(int argn, char *argv[]) {
     gpu_resizedImage= gpu_resizeImage(gpu_grayscaleImage,size, timer, GPUelapsedTime);
     printf("[Resize] Execution time on GPU: %f msec\n", GPUelapsedTime);
 
+    
     //cv::imshow("Input image", input);
     //gpu_resizedImage.download(output);
     //cv::imshow("Resized and converted to grayscale image", output);
@@ -123,3 +128,4 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaE
     cudaEventElapsedTime(&elapsedTime, timer[0], timer[1]);
     return out;
 }
+
