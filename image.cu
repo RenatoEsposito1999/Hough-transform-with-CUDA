@@ -9,9 +9,8 @@
 
 /*N.B: non posso comparare un metodo di libreria con un metodo eseguito a mano quindi o comparo due metodi di libreria o scrivo sia sequenziale che kernel per
 comparare.*/
-//N.B al momento l'operazione da parallelizzare è l'equalizzazione e non il calcolo dell'istogramma eventualmente
-//domando alla prof se devo fare pure quello.
 
+//Bisognoa provare anche la shared memory perché può essere più veloce se l'istogramma cumulativo è piccolo e entra tutto 
 /*
     Prossima cosa da fare: Equalizzazione dell'istogramma su GPU. 
 */
@@ -19,12 +18,15 @@ comparare.*/
 
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
-cv::Mat cpu_equalization(cv::Mat, float*);
+cv::Mat cpu_equalization(cv::Mat, cv::Mat, float*);
 cv::Mat calcHist(cv::Mat);
-cv::Mat cpu_HoughTransformLine(cv::Mat, float *); //da vedere perdché ritorna un output tutto nero. 
+cv::Mat cpu_HoughTransformLine(cv::Mat, float *); //da vedere perché ritorna un output tutto nero. 
 
+__device__ uchar saturate_cast_uchar(float);
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat, cudaEvent_t*, float&);
 cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size, cudaEvent_t*, float&);
+__global__ void gpu_equalizeImage(uchar*,uchar*, uchar*, int,int);
+
 
 //cv::Mat metodoHough è l'unico che ritorna l'output finale.
 
@@ -32,9 +34,11 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size, cudaEvent_t*, 
 int main(int argn, char *argv[]) {
     //Variables
     cv::Mat cpu_grayscaleImage, cpu_resizedImage, cpu_Hist, cpu_equalizedImage;
-    cv::cuda::GpuMat gpu_grayscaleImage, gpu_resizedImage, gpu_Hist;
+    cv::cuda::GpuMat gpu_grayscaleImage, gpu_resizedImage, gpu_Hist, gpu_equalizedImage, gpu_cumHist;
     cv::Mat gpu_output; //Final output image (downloaded from GPU)
     cv::Mat cpu_output;
+    cv::Mat cumHist;
+    dim3 threadsPerBlock(16,16), numBlocks; 
     cudaEvent_t timer[2];
     cv::cuda::GpuMat gpuImage;
     float GPUelapsedTime, CPUelapsedTime;
@@ -70,16 +74,41 @@ int main(int argn, char *argv[]) {
     gpu_resizedImage= gpu_resizeImage(gpu_grayscaleImage,size, timer, GPUelapsedTime);
     printf("[Resize] Execution time on GPU: %f msec\n", GPUelapsedTime);
 
+    cumHist = calcHist(cpu_resizedImage);
+
     //Equalization on CPU
-    cpu_equalizedImage = cpu_equalization( cpu_resizedImage , &CPUelapsedTime);
+    cpu_equalizedImage = cpu_equalization( cpu_resizedImage , cumHist, &CPUelapsedTime);
     printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
     cv::imwrite("Input of Equalization.jpg", cpu_resizedImage);
     cv::imwrite("Output_by_myself.jpg", cpu_equalizedImage);
 
+    //this method allocates and loads on GPU
+    gpu_equalizedImage.create(gpu_resizedImage.rows,gpu_resizedImage.cols, gpu_resizedImage.type());//
+    //Upload of cumHist on GPU
+    gpu_cumHist.upload(cumHist);
+    
     //Equalization on GPU
-    //code here
+    /*numBlock is calculated to cover the entire size of the image, rounding up if necessary to handle the last few excess pixels.
+    Each thread block has a 2D grid of 16x16 threads. Each thread in a block deals with a specific pixel of the image. 
+    The entire image is divided into blocks, and each block is assigned to a specific portion of the image.*/ 
+    numBlocks = (gpu_resizedImage.cols + threadsPerBlock.x - 1) / threadsPerBlock.x, (gpu_resizedImage.rows + threadsPerBlock.y - 1) / threadsPerBlock.y;
+    gpu_equalizeImage<<<numBlocks,threadsPerBlock>>>(gpu_resizedImage.ptr(), gpu_cumHist.ptr(), gpu_equalizedImage.ptr(),gpu_resizedImage.rows,gpu_resizedImage.cols);
+    cudaDeviceSynchronize();
 
+    cudaError_t cuda_error = cudaGetLastError();
+    if (cuda_error != cudaSuccess)
+        fprintf(stderr, "Errore CUDA: %s\n", cudaGetErrorString(cuda_error));
+
+
+    cv::Mat test;
+    gpu_equalizedImage.download(test);
+    cv::imwrite("CUDA.jpg", test);
+    
+    
+    
+    
+    
     //Hough Transform for line on CPU
     //cpu_output=cpu_HoughTransformLine(cpu_equalizedImage,&CPUelapsedTime);
     //printf("[Hough Transform] Execution time on CPU: %f msec\n", CPUelapsedTime);
@@ -92,7 +121,8 @@ int main(int argn, char *argv[]) {
     return 0;
 }
 
-//Histogram computation
+
+//Histogram computation - Equalized and Normalized cumulativ hist. 
 cv::Mat calcHist(cv::Mat image){
     int histSize = 256;
 
@@ -117,14 +147,11 @@ cv::Mat calcHist(cv::Mat image){
 }
 
 //Histogram equalization on CPU
-cv::Mat cpu_equalization(cv::Mat image, float *elapsedTime){
+cv::Mat cpu_equalization(cv::Mat image, cv::Mat cumulative_hist, float *elapsedTime){
     struct timespec start_time, end_time;
     cv::Mat equalizedImage = image.clone();
-    cv::Mat cumulative_hist;
 
     clock_gettime(CLOCK_MONOTONIC, &start_time);
-    //Histogram Computation
-    cumulative_hist = calcHist(image);
     //Equalization
     for (int i = 0; i < image.rows; ++i) {
         for (int j = 0; j < image.cols; ++j) {
@@ -212,6 +239,7 @@ cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat gpuImage, cudaEvent_t* time
 
 //Resize of the image using OpenCV for CUDA (GPU)
 cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaEvent_t* timer, float& elapsedTime){
+
     cv::cuda::GpuMat out;
     //Timer's start
     cudaEventRecord(timer[0], 0);
@@ -222,4 +250,21 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaE
     //Elapsed time calculation
     cudaEventElapsedTime(&elapsedTime, timer[0], timer[1]);
     return out;
+}
+
+
+__device__ uchar saturate_cast_uchar(float x) {
+    return (uchar)(x < 0 ? 0 : (x > 255 ? 255 : x));
+}
+
+//Equalization on GPU
+__global__ void gpu_equalizeImage(uchar* image, uchar* cumulative_hist, uchar* equalizedImage, int rows, int cols){
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (i < rows && j < cols) {
+        //uchar pixel_value = image[i*cols+j];
+        //equalizedImage[i*cols+j] = saturate_cast_uchar(cumulative_hist[pixel_value] * 255.0); //sature_cast_uchar is used to guarantee values between 0-255
+        equalizedImage[i*cols+j] = 0;
+    }
 }
