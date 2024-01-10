@@ -16,6 +16,17 @@ comparare.*/
 */
 
 
+__global__ void equalizeHistKernel(unsigned char* input, int width, int height, float* cdf){
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x < width && y < height) {
+        int idx = y * width + x;
+        input[idx] = 255;//static_cast<unsigned char>(255.0 * (cdf[input[idx]] - cdf[0]) / (width * height - 1));
+    }
+}
+
+
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
 cv::Mat cpu_equalization(cv::Mat, cv::Mat, float*);
@@ -51,6 +62,67 @@ int main(int argn, char *argv[]) {
         return -1;
     }
 
+    int width = input.cols;
+    int height = input.rows;
+    //Size of the image
+    size_t imageSize = width * height * sizeof(unsigned char);
+
+    // Converte l'immagine Mat in un array di byte
+    unsigned char* h_input = input.data;
+
+    // Alloca la memoria sul device
+    unsigned char* d_input;
+    cudaMalloc((void**)&d_input, imageSize);
+    cudaMemcpy(d_input, h_input, imageSize, cudaMemcpyHostToDevice);
+
+    // Calcola l'istogramma dell'immagine
+    int histSize = 256;
+    float hist[histSize];
+    memset(hist, 0, histSize * sizeof(float));
+
+    for (int i = 0; i < width * height; ++i) {
+        hist[h_input[i]]++;
+    }
+
+    // Calcola la funzione di distribuzione cumulativa (CDF)
+    float cdf[histSize];
+    cdf[0] = hist[0];
+    for (int i = 1; i < histSize; ++i) {
+        cdf[i] = cdf[i - 1] + hist[i];
+    }
+
+    // Normalizza la CDF
+    for (int i = 0; i < histSize; ++i) {
+        cdf[i] /= cdf[histSize - 1];
+    }
+
+    // Alloca la memoria sul device per la CDF
+    float* d_cdf;
+    cudaMalloc((void**)&d_cdf, histSize * sizeof(float));
+    cudaMemcpy(d_cdf, cdf, histSize * sizeof(float), cudaMemcpyHostToDevice);
+
+    //Definisci la griglia e il blocco dei thread
+    dim3 blockDim(16, 16);
+    dim3 gridDim((width + blockDim.x - 1) / blockDim.x, (height + blockDim.y - 1) / blockDim.y);
+
+    // Applica l'equalizzazione dell'istogramma utilizzando il kernel CUDA
+    equalizeHistKernel<<<gridDim, blockDim>>>(d_input, width, height, d_cdf);
+
+    // Copia i risultati dal device alla memoria host
+    cudaMemcpy(h_input, d_input, imageSize, cudaMemcpyDeviceToHost);
+
+    // Libera la memoria sul device
+    cudaFree(d_input);
+    cudaFree(d_cdf);
+
+    // Mostra l'immagine originale e quella equalizzata
+    cv::imwrite("Original_Image.jpg", h_input);
+
+    // Crea un'altra immagine per l'output
+    cv::Mat equalizedImage(height, width, CV_8UC1, h_input);
+    cv::imwrite("Equalized_Image.jpg", equalizedImage);
+
+    /*
     //Loading of the image from the cpu to gpu
     gpuImage.upload(input);
     //Timer Evenet creation
@@ -89,23 +161,24 @@ int main(int argn, char *argv[]) {
     gpu_cumHist.upload(cumHist);
     
     //Equalization on GPU
-    /*numBlock is calculated to cover the entire size of the image, rounding up if necessary to handle the last few excess pixels.
-    Each thread block has a 2D grid of 16x16 threads. Each thread in a block deals with a specific pixel of the image. 
-    The entire image is divided into blocks, and each block is assigned to a specific portion of the image.*/ 
+    //numBlock is calculated to cover the entire size of the image, rounding up if necessary to handle the last few excess pixels.
+    //Each thread block has a 2D grid of 16x16 threads. Each thread in a block deals with a specific pixel of the image. 
+    //The entire image is divided into blocks, and each block is assigned to a specific portion of the image.
     numBlocks = (gpu_resizedImage.cols + threadsPerBlock.x - 1) / threadsPerBlock.x, (gpu_resizedImage.rows + threadsPerBlock.y - 1) / threadsPerBlock.y;
     gpu_equalizeImage<<<numBlocks,threadsPerBlock>>>(gpu_resizedImage.ptr(), gpu_cumHist.ptr(), gpu_equalizedImage.ptr(),gpu_resizedImage.rows,gpu_resizedImage.cols);
     cudaDeviceSynchronize();
 
     cudaError_t cuda_error = cudaGetLastError();
     if (cuda_error != cudaSuccess)
-        fprintf(stderr, "Errore CUDA: %s\n", cudaGetErrorString(cuda_error));
+        fprintf(stderr, "CUDA ERROR: %s\n", cudaGetErrorString(cuda_error));
 
 
     cv::Mat test;
     gpu_equalizedImage.download(test);
     cv::imwrite("CUDA.jpg", test);
     
-    
+
+    */
     
     
     
