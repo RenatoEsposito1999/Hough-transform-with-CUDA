@@ -6,44 +6,12 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
-
-/*N.B: non posso comparare un metodo di libreria con un metodo eseguito a mano quindi o comparo due metodi di libreria o scrivo sia sequenziale che kernel per
-comparare.*/
-
-//Bisognoa provare anche la shared memory perché può essere più veloce se l'istogramma cumulativo è piccolo e entra tutto 
-/*
-    Prossima cosa da fare: Equalizzazione dell'istogramma su GPU. 
-*/
-
-__global__ void calculateHistogram(const uchar* image, int size, int* histogram, int histSize) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-
-    while (tid < size) {
-        atomicAdd(&histogram[image[tid]], 1);
-        tid += blockDim.x * gridDim.x;
-    }
-}
-
-__global__ void normalizeAndComputeCDF(float* hist, float* cdf, int size) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    float sum = 0;
-
-    while (tid < size) {
-        sum += hist[tid];
-        cdf[tid] = sum;
-        tid += blockDim.x * gridDim.x;
-    }
-}
+//Il problema potrebbe anche essere qualcosa che riguarda l'istogramma.
 
 
-__global__ void equalizeHistCUDA(uchar* data, float* cdf, int size, float scale) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
 
-    while (tid < size) {
-        data[tid] = static_cast<uchar>(255.0 * (cdf[data[tid]] / scale));
-        tid += blockDim.x * gridDim.x;
-    }
-}
+
+    
 
 
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
@@ -55,11 +23,9 @@ cv::Mat cpu_HoughTransformLine(cv::Mat, float *); //da vedere perché ritorna un
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat, cudaEvent_t*, float&);
 cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size, cudaEvent_t*, float&);
 cv::cuda::GpuMat equalizeHistOnGPU(cv::cuda::GpuMat, cv::Mat);
-__global__ void gpu_equalizeImage(uchar*,uchar*, uchar*, int,int);
+__global__ void equalizeHistCUDA(uchar*, uchar*,float* , int, int);
 
 
-
-//cv::Mat metodoHough è l'unico che ritorna l'output finale.
 
 
 int main(int argn, char *argv[]) {
@@ -118,72 +84,38 @@ int main(int argn, char *argv[]) {
     cv::cuda::equalizeHist(gpu_resizedImage, gpu_equalizedImage);
 
     gpu_equalizedImage.download(output);
-    cv::imwrite("Rotuine.jpg", output);
+    cv::imwrite("TRotuine.jpg", output);
 
-    //cv::Mat output2;
-    //out.download(output2);
-    //cv::imwrite("gpu by myself.jpg", output2);
 
-    //MIA IMPLEMENTAZIONE 
-    int histSize = 256;
-    int histDataSize = gpu_resizedImage.rows * gpu_resizedImage.cols;
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (histDataSize + threadsPerBlock - 1) / threadsPerBlock;
+    //EQUALIZATION ON GPU - MIA IMPLEMENTAZIONE 
 
-    // Allocazione di memoria per l'istogramma sulla GPU
-    cv::cuda::GpuMat d_histogram(1, histSize, CV_32S, cv::Scalar(0));
-
-    // Lancia il kernel CUDA per il calcolo dell'istogramma
-    calculateHistogram<<<blocksPerGrid, threadsPerBlock>>>(gpu_resizedImage.ptr<uchar>(), histDataSize, d_histogram.ptr<int>(), histSize);
-
-    // Normalizza e calcola la distribuzione cumulativa sulla GPU
-    cv::cuda::GpuMat d_hist(d_histogram);
-    cv::cuda::GpuMat d_cdf(d_histogram.size(), d_histogram.type());
-    normalizeAndComputeCDF<<<1, histSize>>>(d_hist.ptr<float>(), d_cdf.ptr<float>(), histSize);
-
-    // Scarica la distribuzione cumulativa dalla GPU
-    cv::Mat cumDist;
-    d_cdf.download(cumDist);
-
-    // Copia l'immagine sulla GPU
-    cv::cuda::GpuMat d_image(cpu_resizedImage);
-
-    // Lancia il kernel CUDA per l'equalizzazione dell'istogramma
-    int threadsxBlock = 256;
-    int blocksxGrid = (cpu_resizedImage.rows * cpu_resizedImage.cols + threadsxBlock - 1) / threadsxBlock;
-    float scale = cumDist.at<float>(histSize - 1);
-    equalizeHistCUDA<<<blocksxGrid, threadsxBlock>>>(d_image.ptr<uchar>(), d_cdf.ptr<float>(), cpu_resizedImage.rows * cpu_resizedImage.cols, scale);
-
-    // Scarica l'immagine equalizzata dalla GPU
-    cv::Mat equalized;
-    d_image.download(equalized);
-    cv::imwrite("CUDA.jpg",)
-    
-    /*/Calcolo istogramma cumulativo x equalizzazione
+    //Histogram calculation
+    //Uploading of cumHist on GPU
     cv::cuda::GpuMat gpu_cumHist(cumHist);
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (gpu_resizedImage.rows * gpu_resizedImage.cols + threadsPerBlock - 1) / threadsPerBlock;
-    equalizeHistCUDA<<<blocksPerGrid, threadsPerBlock>>>(gpu_resizedImage.ptr<uchar>(), gpu_cumHist.ptr<float>(), gpu_resizedImage.rows * gpu_resizedImage.cols);
-    cudaError_t cuda_error = cudaGetLastError();
-    if (cuda_error != cudaSuccess)
-        fprintf(stderr, "Errore CUDA: %s\n", cudaGetErrorString(cuda_error));
+    
 
-    // Scarica l'immagine equalizzata dalla GPU
-    cv::Mat equalized;
-    gpu_resizedImage.download(equalized);
-    cv::imwrite("Myself.jpg",equalized);
-
-    //cv::cuda::GpuMat out = equalizeHistOnGPU(gpu_resizedImage, cumHist);
-
+    // Calcola il numero di blocchi necessari per coprire completamente l'immagine
+    dim3 nThreadPerBlocco(256);
+    dim3 nBlocks((gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x, (gpu_resizedImage.rows + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x);
+    /*
+        //dim3 nBlocks((gpu_resizedImage.rows * gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x);
+        // Ricalcola il numero di blocchi necessari in base al numero effettivo di thread per blocco
+        const int actualBlocksPerGridX = (imageWidth + actualThreadsPerBlock - 1) / actualThreadsPerBlock;
+        const int actualBlocksPerGridY = (imageHeight + actualThreadsPerBlock - 1) / actualThreadsPerBlock;
+        actualThreadsPerBlock  è nthreadperblocco;
     */
+    //dim3 nBlocks((gpu_resizedImage.rows * gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x);
+    printf("nBlocks = %d\n", nBlocks.x);
+    cv::cuda::GpuMat equaliziedImgOnGPU(gpu_resizedImage.size(), gpu_resizedImage.type());
+    equalizeHistCUDA<<<nBlocks, nThreadPerBlocco>>>(gpu_resizedImage.ptr<uchar>(), equaliziedImgOnGPU.ptr<uchar>(),gpu_cumHist.ptr<float>(), gpu_resizedImage.cols,  gpu_resizedImage.rows);
+
+    cv::Mat equalized;
+    equaliziedImgOnGPU.download(equalized);
+    cv::imwrite("TRequalized.jpg",equalized);
+
+
+
     //FINE MIA IMPLEMENTAZIONE
-    
-    
-    
-    //Hough Transform for line on CPU
-    //cpu_output=cpu_HoughTransformLine(cpu_equalizedImage,&CPUelapsedTime);
-    //printf("[Hough Transform] Execution time on CPU: %f msec\n", CPUelapsedTime);
-    //cv::imwrite("output.jpg",cpu_output);
 
     
     //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library
@@ -324,3 +256,28 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaE
     return out;
 }
 
+__global__ void equalizeHistCUDA(uchar* data, uchar* out, float* cdf, int width, int height) {
+    int x = threadIdx.x + blockIdx.x * blockDim.x;
+    int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+    float scale = cdf[255];
+
+    while (y < height) {
+        while (x < width) {
+            int tid = y * width + x;
+            out[tid] = 1;//static_cast<uchar>(255.0 * (cdf[data[tid]] / scale));
+            x += blockDim.x * gridDim.x;
+        }
+        x = threadIdx.x + blockIdx.x * blockDim.x;
+        y += blockDim.y * gridDim.y;
+    }
+}
+
+/*__global__ void equalizeHistCUDA(uchar* data, uchar* out, float* cdf, int size){
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    float scale = cdf[255];
+    while (tid < size) {
+        out[tid] = static_cast<uchar>(255.0 * (cdf[data[tid]] / scale));
+        tid += blockDim.x * gridDim.x;
+    }
+}*/

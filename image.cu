@@ -6,7 +6,9 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
+//controllare che le l'idea di equalizzazion sia simile tra GPU e cpu
 //IL PROBLEMA è CHE L'EQUALIZAZZIONE NON è FATTA SU TUTTA L'IMMAVINE POTREBBE ESSERE UN PROBLEMA DEI BLOCCHI E DEI THREADS QUINDI INDAGARE. vai riga 104
+
 
 __global__ void equalizeHistCUDA(uchar* data, float* cdf, int size) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
