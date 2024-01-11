@@ -6,7 +6,7 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
-//Il problema potrebbe anche essere qualcosa che riguarda l'istogramma.
+//Provare anche l'approccio con la SM
 
 
 
@@ -78,11 +78,8 @@ int main(int argn, char *argv[]) {
     cpu_equalizedImage = cpu_equalization( cpu_resizedImage , cumHist, &CPUelapsedTime);
     printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
-    //cv::imwrite("Input of Equalization.jpg", cpu_resizedImage);
-    //cv::imwrite("Output_by_myself.jpg", cpu_equalizedImage);
-
+    //CUDA ROUTINE EQUALIZATION
     cv::cuda::equalizeHist(gpu_resizedImage, gpu_equalizedImage);
-
     gpu_equalizedImage.download(output);
     cv::imwrite("TRotuine.jpg", output);
 
@@ -95,22 +92,26 @@ int main(int argn, char *argv[]) {
     
 
     // Calcola il numero di blocchi necessari per coprire completamente l'immagine
-    dim3 nThreadPerBlocco(256);
-    dim3 nBlocks((gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x, (gpu_resizedImage.rows + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x);
-    /*
-        //dim3 nBlocks((gpu_resizedImage.rows * gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x);
-        // Ricalcola il numero di blocchi necessari in base al numero effettivo di thread per blocco
-        const int actualBlocksPerGridX = (imageWidth + actualThreadsPerBlock - 1) / actualThreadsPerBlock;
-        const int actualBlocksPerGridY = (imageHeight + actualThreadsPerBlock - 1) / actualThreadsPerBlock;
-        actualThreadsPerBlock  è nthreadperblocco;
-    */
-    //dim3 nBlocks((gpu_resizedImage.rows * gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x);
+    dim3 nThreadPerBlocco(256,256);
+    dim3 nBlocks((gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x, (gpu_resizedImage.rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y);
+     
     printf("nBlocks = %d\n", nBlocks.x);
     cv::cuda::GpuMat equaliziedImgOnGPU(gpu_resizedImage.size(), gpu_resizedImage.type());
     equalizeHistCUDA<<<nBlocks, nThreadPerBlocco>>>(gpu_resizedImage.ptr<uchar>(), equaliziedImgOnGPU.ptr<uchar>(),gpu_cumHist.ptr<float>(), gpu_resizedImage.cols,  gpu_resizedImage.rows);
 
     cv::Mat equalized;
     equaliziedImgOnGPU.download(equalized);
+    /*for (int i = 340; i < equalized.rows; i++){
+        for (int j = 0; j < equalized.cols; j++){
+            if(equalized.at<uchar>(i,j) != 1){
+                printf("%d,%d diversi da 1\n", i,j);
+                return -1;
+            }
+            //else
+                //printf("ImmagieEqualizzata(%d,%d) = %d\n",i,j,equalized.at<uchar>(i,j));
+        }
+    }*/
+
     cv::imwrite("TRequalized.jpg",equalized);
 
 
@@ -256,16 +257,15 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaE
     return out;
 }
 
-__global__ void equalizeHistCUDA(uchar* data, uchar* out, float* cdf, int width, int height) {
+__global__ void equalizeHistCUDA(uchar* data, uchar* out, float* cdf, int cols, int rows) {
     int x = threadIdx.x + blockIdx.x * blockDim.x;
     int y = threadIdx.y + blockIdx.y * blockDim.y;
 
     float scale = cdf[255];
-
-    while (y < height) {
-        while (x < width) {
-            int tid = y * width + x;
-            out[tid] = 1;//static_cast<uchar>(255.0 * (cdf[data[tid]] / scale));
+    while (y < rows) {
+        while (x < cols) {
+            int index = y * cols + x;
+            out[index] = static_cast<uchar>(255.0 * (cdf[data[index]] / scale));
             x += blockDim.x * gridDim.x;
         }
         x = threadIdx.x + blockIdx.x * blockDim.x;
@@ -273,11 +273,4 @@ __global__ void equalizeHistCUDA(uchar* data, uchar* out, float* cdf, int width,
     }
 }
 
-/*__global__ void equalizeHistCUDA(uchar* data, uchar* out, float* cdf, int size){
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    float scale = cdf[255];
-    while (tid < size) {
-        out[tid] = static_cast<uchar>(255.0 * (cdf[data[tid]] / scale));
-        tid += blockDim.x * gridDim.x;
-    }
-}*/
+

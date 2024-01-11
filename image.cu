@@ -6,18 +6,12 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
-//controllare che le l'idea di equalizzazion sia simile tra GPU e cpu
-//IL PROBLEMA è CHE L'EQUALIZAZZIONE NON è FATTA SU TUTTA L'IMMAVINE POTREBBE ESSERE UN PROBLEMA DEI BLOCCHI E DEI THREADS QUINDI INDAGARE. vai riga 104
+//Provare anche l'approccio con la SM
 
 
-__global__ void equalizeHistCUDA(uchar* data, float* cdf, int size) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    float scale = cdf[255];
-    while (tid < size) {
-        data[tid] = static_cast<uchar>(255.0 * (cdf[data[tid]] / scale));
-        tid += blockDim.x * gridDim.x;
-    }
-}
+
+
+    
 
 
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
@@ -29,10 +23,9 @@ cv::Mat cpu_HoughTransformLine(cv::Mat, float *); //da vedere perché ritorna un
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat, cudaEvent_t*, float&);
 cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size, cudaEvent_t*, float&);
 cv::cuda::GpuMat equalizeHistOnGPU(cv::cuda::GpuMat, cv::Mat);
+__global__ void equalizeHistCUDA(uchar*, uchar*,float* , int, int);
 
 
-
-//cv::Mat metodoHough è l'unico che ritorna l'output finale.
 
 
 int main(int argn, char *argv[]) {
@@ -85,33 +78,41 @@ int main(int argn, char *argv[]) {
     cpu_equalizedImage = cpu_equalization( cpu_resizedImage , cumHist, &CPUelapsedTime);
     printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
-    //cv::imwrite("Input of Equalization.jpg", cpu_resizedImage);
-    //cv::imwrite("Output_by_myself.jpg", cpu_equalizedImage);
-
+    //CUDA ROUTINE EQUALIZATION
     cv::cuda::equalizeHist(gpu_resizedImage, gpu_equalizedImage);
-
     gpu_equalizedImage.download(output);
-    cv::imwrite("Rotuine.jpg", output);
+    cv::imwrite("TRotuine.jpg", output);
 
-    //cv::Mat output2;
-    //out.download(output2);
-    //cv::imwrite("gpu by myself.jpg", output2);
 
-    //MIA IMPLEMENTAZIONE 
+    //EQUALIZATION ON GPU - MIA IMPLEMENTAZIONE 
 
-    //Carico l'istogramma cumulativo sulla gpu
+    //Histogram calculation
+    //Uploading of cumHist on GPU
     cv::cuda::GpuMat gpu_cumHist(cumHist);
-    int threadsPerBlock = 256;
-    printf("righe = %d\t colonne = %d\n",gpu_resizedImage.rows, gpu_resizedImage.cols);
-    //vedere chatgpt le ultime due o tre risposte cosa propone
-    int blocksPerGrid = (gpu_resizedImage.rows * gpu_resizedImage.cols + threadsPerBlock - 1) / threadsPerBlock;
-    printf("blocksPerGrid = %d\n", blocksPerGrid);
-    equalizeHistCUDA<<<blocksPerGrid, threadsPerBlock>>>(gpu_resizedImage.ptr<uchar>(), gpu_cumHist.ptr<float>(), gpu_resizedImage.rows * gpu_resizedImage.cols);
+    
 
-    //Scarica l'immagine equalizzata dalla GPU
+    // Calcola il numero di blocchi necessari per coprire completamente l'immagine
+    dim3 nThreadPerBlocco(256,256);
+    dim3 nBlocks((gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x, (gpu_resizedImage.rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y);
+     
+    printf("nBlocks = %d\n", nBlocks.x);
+    cv::cuda::GpuMat equaliziedImgOnGPU(gpu_resizedImage.size(), gpu_resizedImage.type());
+    equalizeHistCUDA<<<nBlocks, nThreadPerBlocco>>>(gpu_resizedImage.ptr<uchar>(), equaliziedImgOnGPU.ptr<uchar>(),gpu_cumHist.ptr<float>(), gpu_resizedImage.cols,  gpu_resizedImage.rows);
+
     cv::Mat equalized;
-    gpu_resizedImage.download(equalized);
-    cv::imwrite("equalized.jpg",equalized);
+    equaliziedImgOnGPU.download(equalized);
+    /*for (int i = 340; i < equalized.rows; i++){
+        for (int j = 0; j < equalized.cols; j++){
+            if(equalized.at<uchar>(i,j) != 1){
+                printf("%d,%d diversi da 1\n", i,j);
+                return -1;
+            }
+            //else
+                //printf("ImmagieEqualizzata(%d,%d) = %d\n",i,j,equalized.at<uchar>(i,j));
+        }
+    }*/
+
+    cv::imwrite("TRequalized.jpg",equalized);
 
 
 
@@ -255,4 +256,21 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaE
     cudaEventElapsedTime(&elapsedTime, timer[0], timer[1]);
     return out;
 }
+
+__global__ void equalizeHistCUDA(uchar* data, uchar* out, float* cdf, int cols, int rows) {
+    int x = threadIdx.x + blockIdx.x * blockDim.x;
+    int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+    float scale = cdf[255];
+    while (y < rows) {
+        while (x < cols) {
+            int index = y * cols + x;
+            out[index] = static_cast<uchar>(255.0 * (cdf[data[index]] / scale));
+            x += blockDim.x * gridDim.x;
+        }
+        x = threadIdx.x + blockIdx.x * blockDim.x;
+        y += blockDim.y * gridDim.y;
+    }
+}
+
 
