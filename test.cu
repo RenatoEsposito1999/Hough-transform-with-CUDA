@@ -7,7 +7,7 @@
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
 //Provare anche l'approccio con la SM
-
+//Capire perché nella stampa le prime 350/370 posizioni sono  1 e poi il resto no, dopo capire perché equalized sembra già inizializzato
 
 
 
@@ -91,32 +91,24 @@ int main(int argn, char *argv[]) {
     cv::cuda::GpuMat gpu_cumHist(cumHist);
     
 
-    // Calcola il numero di blocchi necessari per coprire completamente l'immagine
-    dim3 nThreadPerBlocco(256,256);
+    dim3 nThreadPerBlocco(16,16);
     dim3 nBlocks((gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x, (gpu_resizedImage.rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y);
      
-    printf("nBlocks = %d\n", nBlocks.x);
     cv::cuda::GpuMat equaliziedImgOnGPU(gpu_resizedImage.size(), gpu_resizedImage.type());
     equalizeHistCUDA<<<nBlocks, nThreadPerBlocco>>>(gpu_resizedImage.ptr<uchar>(), equaliziedImgOnGPU.ptr<uchar>(),gpu_cumHist.ptr<float>(), gpu_resizedImage.cols,  gpu_resizedImage.rows);
 
     cv::Mat equalized;
     equaliziedImgOnGPU.download(equalized);
-    /*for (int i = 340; i < equalized.rows; i++){
-        for (int j = 0; j < equalized.cols; j++){
-            if(equalized.at<uchar>(i,j) != 1){
-                printf("%d,%d diversi da 1\n", i,j);
-                return -1;
-            }
-            //else
-                //printf("ImmagieEqualizzata(%d,%d) = %d\n",i,j,equalized.at<uchar>(i,j));
-        }
-    }*/
-
     cv::imwrite("TRequalized.jpg",equalized);
+    equaliziedImgOnGPU.release();
 
-
-
-    //FINE MIA IMPLEMENTAZIONE
+    for (int i = 0; i < equalized.rows; i++){
+        for (int j = 0; j < equalized.cols; j++){
+            printf("equalized(%d,%d): %d\n", i,j, equalized.at<uchar>(i,j));
+        }
+    }
+    
+    
 
     
     //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library
@@ -265,7 +257,7 @@ __global__ void equalizeHistCUDA(uchar* data, uchar* out, float* cdf, int cols, 
     while (y < rows) {
         while (x < cols) {
             int index = y * cols + x;
-            out[index] = static_cast<uchar>(255.0 * (cdf[data[index]] / scale));
+            out[index] = 1;//static_cast<uchar>(255.0 * (cdf[data[index]] / scale));
             x += blockDim.x * gridDim.x;
         }
         x = threadIdx.x + blockIdx.x * blockDim.x;
