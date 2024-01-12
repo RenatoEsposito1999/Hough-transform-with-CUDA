@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/cudaimgproc.hpp>
@@ -17,8 +18,8 @@
 
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
-cv::Mat cpu_equalization(cv::Mat, cv::Mat, float*);
-cv::Mat calcHist(cv::Mat);
+cv::Mat cpu_equalization(cv::Mat, int*, float*);
+void calcCumHist(cv::Mat, int*);
 cv::Mat cpu_HoughTransformLine(cv::Mat, float *); //da vedere perché ritorna un output tutto nero. 
 
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat, cudaEvent_t*, float&);
@@ -31,9 +32,9 @@ __global__ void equalizeHistCUDA(uchar*, uchar*,float* , int, int);
 
 int main(int argn, char *argv[]) {
     //Variables
-    cv::Mat cpu_grayscaleImage, cpu_resizedImage, cpu_Hist, cpu_equalizedImage;
+    cv::Mat cpu_grayscaleImage, cpu_resizedImage, cpu_equalizedImage;
     cv::cuda::GpuMat gpuImage, gpu_grayscaleImage, gpu_resizedImage, gpu_Hist ;
-    cv::Mat cumHist;
+    int cumHist[256]={0};
     dim3 threadsBlock(16,16), numBlocks; 
     cudaEvent_t timer[2];
     float GPUelapsedTime, CPUelapsedTime;
@@ -73,27 +74,19 @@ int main(int argn, char *argv[]) {
     gpu_resizedImage= gpu_resizeImage(gpu_grayscaleImage,size, timer, GPUelapsedTime);
     printf("[Resize] Execution time on GPU: %f msec\n", GPUelapsedTime);
 
-    cumHist = calcHist(cpu_resizedImage);
-
-    //Equalization on CPU
-    cpu_equalizedImage = cpu_equalization( cpu_resizedImage , cumHist, &CPUelapsedTime);
+    //CPU Equalization by myself 
+    calcCumHist(cpu_resizedImage,cumHist);
+    cpu_equalizedImage = cpu_equalization(cpu_resizedImage,cumHist,&CPUelapsedTime);
     printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
+    cv::imwrite("test.jpg",cpu_equalizedImage);
+
+
     
-
-
-    //EQUALIZATION ON GPU - MIA IMPLEMENTAZIONE
-
-
-
-    //EQUALIZATION END
-    
-
     
     //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
     //But to avoid any problem I do it manually.
     cpu_grayscaleImage.release();
     cpu_resizedImage.release();
-    cpu_Hist.release();
     cpu_equalizedImage.release();
     gpuImage.release();
     gpu_grayscaleImage.release();
@@ -106,42 +99,39 @@ int main(int argn, char *argv[]) {
 }
 
 
-//Histogram computation - Equalized and Normalized cumulativ hist. 
-cv::Mat calcHist(cv::Mat image){
-    int histSize = 256;
-    float sum = 0;
-    //Histogram calculation
-    cv::Mat hist = cv::Mat::zeros(1, histSize, CV_32F);
-    for (int i = 0; i < image.rows; ++i) {
-        for (int j = 0; j < image.cols; ++j) {
-            int pixel_value = static_cast<int>(image.at<uchar>(i*image.cols+j));
-            hist.at<float>(pixel_value)++;
+//Cumulative Histogram computation
+void calcCumHist(cv::Mat image, int *cumHist){
+    int nBins = 256, sum=0;
+    int hist[nBins];
+    memset(hist,0,sizeof(hist));
+    //Histogram
+    for (int i = 0; i<image.rows; i++){
+        for(int j = 0; j<image.cols; j++){
+            unsigned char pixel_value= image.at<unsigned char>(i, j);
+            hist[pixel_value]++;
         }
     }
 
-    //Cumulative histogram
-    cv::Mat cumulative_hist = cv::Mat::zeros(hist.size(), hist.type());
-    for (int i = 1; i < histSize; ++i){
-        sum += hist.at<float>(i);
-        cumulative_hist.at<float>(i) = sum;
-    }    
-    //Normalization between 0-1
-    //cumulative_hist /= image.total();
-
-    return cumulative_hist;
+    for (int i = 0; i<nBins; i++){
+        sum+=hist[i];
+        cumHist[i]=sum;
+    }
 }
 
-//Histogram equalization on CPU
-cv::Mat cpu_equalization(cv::Mat image, cv::Mat cumulative_hist, float *elapsedTime){
-    struct timespec start_time, end_time;
-    cv::Mat equalizedImage = image.clone();
 
+//Histogram equalization on CPU
+cv::Mat cpu_equalization(cv::Mat image,int *cumulative_hist, float *elapsedTime){
+    struct timespec start_time, end_time;
+    cv::Mat equalizedImage(cv::Size(image.rows,image.cols),CV_8UC1,cv::Scalar(255));
+    int area = image.rows*image.cols, ngraylevel=256;
+    uchar pixel_value;
     clock_gettime(CLOCK_MONOTONIC, &start_time);
     //Equalization
-    for (int i = 0; i < image.rows; ++i) {
-        for (int j = 0; j < image.cols; ++j) {
-            int pixel_value = static_cast<int>(image.at<uchar>(i*image.cols+j));
-            equalizedImage.at<uchar>(i*image.cols+j) = cv::saturate_cast<uchar>(cumulative_hist.at<float>(pixel_value) * 255.0); //sature_cast is used to guarantee values between 0-255
+    
+    for (int i =0; i<image.rows; i++){
+        for(int j = 0; j<image.cols; j++){
+            pixel_value = image.at<uchar>(i,j);
+            equalizedImage.at<uchar>(i,j) = ((double)ngraylevel/area)*cumulative_hist[pixel_value];
         }
     }
     clock_gettime(CLOCK_MONOTONIC, &end_time);
