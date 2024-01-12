@@ -78,17 +78,22 @@ int main(int argn, char *argv[]){
     calcCumHist(cpu_resizedImage,cumHist);
     cpu_equalizedImage = cpu_equalization(cpu_resizedImage,cumHist,&CPUelapsedTime);
     printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
-    cv::imwrite("test.jpg",cpu_equalizedImage);
+    cv::imwrite("cpu_equalization.jpg",cpu_equalizedImage);
 
 
     //Equalization on GPU
     //Mem. allocation on GPU for cumHist
     cudaMalloc((void**)&cumHist_device,256*sizeof(int));
     cudaMemcpy(cumHist_device, cumHist, 256*sizeof(int), cudaMemcpyHostToDevice);
-    
+    gpu_equalizedImage = cv::cuda::GpuMat(cv::Size(gpu_resizedImage.rows,gpu_resizedImage.cols), CV_8UC1, cv::Scalar(0));
     numBlocks.x=(gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x;
     numBlocks.y=(gpu_resizedImage.rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y;
-    equalizeHistCUDA<<<numBlocks,nThreadPerBlocco>>>(gpu_resizedImage.ptr<uchar>(),gpu_equalizedImage.ptr<uchar>(),cumHist_device,gpu_resizedImage.cols,gpu_resizedImage.rows);
+    //equalizeHistCUDA<<<numBlocks,nThreadPerBlocco>>>(gpu_resizedImage.ptr<uchar>(),gpu_equalizedImage.ptr<uchar>(),cumHist_device,gpu_resizedImage.cols,gpu_resizedImage.rows);
+
+    //TO DELETEEEEE
+    cv::Mat test;
+    gpu_equalizedImage.download(test);
+    cv::imwrite("Equalization on GPU.jpg", test);
     
     
     //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
@@ -235,7 +240,10 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaE
 }
 
 __global__ void equalizeHistCUDA(uchar* input, uchar* output, int *cumulative_hist, int cols, int rows) {
-    printf("ciao\n");
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    int j = threadIdx.y + blockIdx.y * blockDim.y;
+    if (i < rows && j < cols)
+        output[i,j] = 156; 
     /*
     int x = threadIdx.x + blockIdx.x * blockDim.x;
     int y = threadIdx.y + blockIdx.y * blockDim.y;
