@@ -74,12 +74,19 @@ int main(int argn, char *argv[]) {
     printf("[Resize] Execution time on GPU: %f msec\n", GPUelapsedTime);
 
     cumHist = calcHist(cpu_resizedImage);
-
+    //INDAGARE PERCHé IL CUM HIST HA VALORI X CUI cv::saturate_cast<uchar>(cumulative_hist.at<float>(pixel_value) * 2):255
     //Equalization on CPU
     cpu_equalizedImage = cpu_equalization( cpu_resizedImage , cumHist, &CPUelapsedTime);
     printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
     
+    /*for (int i = 0; i < cpu_equalizedImage.rows; i++){
+        for (int j = 0; j < cpu_equalizedImage.cols; j++){
+            printf("img[%d][%d] = %d\n", i,j, cpu_equalizedImage.at<uchar>(i,j));
+        }
+        
+    }*/
 
+    
 
     //EQUALIZATION ON GPU - MIA IMPLEMENTAZIONE
 
@@ -141,7 +148,7 @@ cv::Mat cpu_equalization(cv::Mat image, cv::Mat cumulative_hist, float *elapsedT
     for (int i = 0; i < image.rows; ++i) {
         for (int j = 0; j < image.cols; ++j) {
             int pixel_value = static_cast<int>(image.at<uchar>(i*image.cols+j));
-            equalizedImage.at<uchar>(i*image.cols+j) = cv::saturate_cast<uchar>(cumulative_hist.at<float>(pixel_value) * 255.0); //sature_cast is used to guarantee values between 0-255
+            equalizedImage.at<uchar>(i*image.cols+j) =cv::saturate_cast<uchar>(cumulative_hist.at<float>(pixel_value) * 255.0); //sature_cast is used to guarantee values between 0-255
         }
     }
     clock_gettime(CLOCK_MONOTONIC, &end_time);
