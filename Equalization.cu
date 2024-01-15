@@ -9,7 +9,8 @@
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
 //Provare anche l'approccio con la SM
-
+//211176
+//351,576
 /*dim3 nThreadPerBlocco(16,16);
     dim3 nBlocks((gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x, (gpu_resizedImage.rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y);*/
 
@@ -33,15 +34,14 @@ __global__ void equalizeHistCUDA(uchar*, uchar*,int* , int, int);
 int main(int argn, char *argv[]){
     //Variables
     cv::Mat cpu_grayscaleImage, cpu_resizedImage, cpu_equalizedImage;
-    cv::cuda::GpuMat gpuImage, gpu_grayscaleImage, gpu_resizedImage,gpu_equalizedImage;
+    cv::cuda::GpuMat gpuImage, gpu_grayscaleImage, gpu_resizedImage;//gpu_equalizedImage;
     int cumHist[256]={0};
     int *cumHist_device;
-    dim3 nThreadPerBlocco(64,64), numBlocks;
+    dim3 nThreadPerBlocco, numBlocks;
     cudaEvent_t timer[2];
     float GPUelapsedTime, CPUelapsedTime;
     cv::Size size(600,600);
-
-
+    uchar *gpu_equalizedImage;
 
     //Read the input image
     cv::Mat input = cv::imread("foto.jpg");
@@ -79,33 +79,54 @@ int main(int argn, char *argv[]){
     calcCumHist(cpu_resizedImage,cumHist);
     cpu_equalizedImage = cpu_equalization(cpu_resizedImage,cumHist,&CPUelapsedTime);
     printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
-    cv::imwrite("cpu_equalization.jpg",cpu_equalizedImage);
+    //cv::imwrite("cpu_equalization.jpg",cpu_equalizedImage);
+    
 
 
     //Equalization on GPU
     //Mem. allocation on GPU for cumHist
     cudaMalloc((void**)&cumHist_device,256*sizeof(int));
+    cudaMalloc((void**)&gpu_equalizedImage, gpu_resizedImage.rows * gpu_resizedImage.cols * sizeof(uchar));
     cudaMemcpy(cumHist_device, cumHist, 256*sizeof(int), cudaMemcpyHostToDevice);
-    gpu_equalizedImage = cv::cuda::GpuMat(cv::Size(gpu_resizedImage.rows,gpu_resizedImage.cols), CV_8UC1, cv::Scalar(157));
-    numBlocks.x=(gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x;
-    numBlocks.y=(gpu_resizedImage.rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y;
-    equalizeHistCUDA<<<numBlocks,nThreadPerBlocco>>>(gpu_resizedImage.ptr<uchar>(),gpu_equalizedImage.ptr<uchar>(),cumHist_device,gpu_resizedImage.cols,gpu_resizedImage.rows);
+
+    
+    //numBlocks.x=(gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x;
+    //numBlocks.y=(gpu_resizedImage.rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y;
+    
+
+    nThreadPerBlocco = dim3(4, 3);
+    numBlocks.y = gpu_resizedImage.rows / nThreadPerBlocco.y + ((gpu_resizedImage.rows % nThreadPerBlocco.y) == 0 ? 0 : 1);
+    numBlocks.x = gpu_resizedImage.cols / nThreadPerBlocco.x + ((gpu_resizedImage.cols % nThreadPerBlocco.x) == 0 ? 0 : 1);
+    equalizeHistCUDA<<<numBlocks,nThreadPerBlocco>>>(gpu_resizedImage.ptr<uchar>(),gpu_equalizedImage,cumHist_device,gpu_resizedImage.cols,gpu_resizedImage.rows);
     cudaDeviceSynchronize();
     cudaError_t cudaErr = cudaGetLastError();
     if (cudaErr != cudaSuccess)
         fprintf(stderr, "Errore CUDA: %s\n", cudaGetErrorString(cudaErr));
 
-    
+    uchar* cpu_equalizedImageOnGPU = (uchar*)malloc(gpu_resizedImage.rows * gpu_resizedImage.cols * sizeof(uchar));
+    cudaMemcpy(cpu_equalizedImageOnGPU, gpu_equalizedImage, gpu_resizedImage.rows * gpu_resizedImage.cols * sizeof(uchar), cudaMemcpyDeviceToHost);
+
     //TO DELETEEEEE
-    cv::Mat test;
-    gpu_equalizedImage.download(test);
-    cv::imwrite("Equalization on GPU.jpg", test);
-    /*for (int i = 0; i<test.rows; i++){
-        for(int j=0; j<test.cols; j++)
-            printf("test[%d][%d] = %d\n",i,j, test.at<uchar>(i,j));
+   //cv::Mat test;
+    //gpu_equalizedImage.download(test);
+    //cv::imwrite("Equalization on GPU.jpg", test);
+    /*for (int i = 590; i<600; i++){
+        for(int j=590; j<600; j++){
+            printf("cpu_equalizedImageOnGPU[%d][%d] = %d\n",i,j, cpu_equalizedImageOnGPU[i*600+j]);
+        }
     }*/
-    
-    
+
+     printf("\tCPUcumulative_hist[255] : %d   \n",cumHist[255]);
+
+
+    cv::Mat img(600, 600, CV_8UC1); 
+    memcpy(img.data, cpu_equalizedImageOnGPU, 600 * 600 * sizeof(uchar));
+    cv::imwrite("Equalization on GPU.jpg", img);
+    for (int i = 599; i<600; i++){
+        for(int j=590; j<600; j++){
+            printf("cpu_Equaliezed[%d][%d] = %d\tgpu_equalized[%d][%d] = %d\n",i,j, cpu_equalizedImage.at<uchar>(i,j),i,j, img.at<uchar>(i,j));
+        }
+    }
     //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
     //But to avoid any problem I do it manually.
     cpu_grayscaleImage.release();
@@ -114,7 +135,9 @@ int main(int argn, char *argv[]){
     gpuImage.release();
     gpu_grayscaleImage.release();
     gpu_resizedImage.release();
-    gpu_equalizedImage.release();
+    //gpu_equalizedImage.release();
+    free(cpu_equalizedImageOnGPU);
+    cudaFree(gpu_equalizedImage);
     cudaFree(cumHist_device);
     cudaEventDestroy(timer[0]);
     cudaEventDestroy(timer[1]);
@@ -249,26 +272,13 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaE
     return out;
 }
 
-__global__ void equalizeHistCUDA(uchar* input, uchar* out, int *cumulative_hist, int cols, int rows) {
-    printf("ciao\n");
+__global__ void equalizeHistCUDA(uchar* input, uchar* output, int *cumulative_hist, int cols, int rows) {
+    int indexRow = threadIdx.y + blockIdx.y * blockDim.y;
+    int indexCol = threadIdx.x + blockIdx.x * blockDim.x;
+    if (indexRow < rows && indexCol < cols) {
+        int index = indexRow * cols + indexCol;
+        uchar pixel_value = input[index];
+        output[index] = (uchar)((cumulative_hist[pixel_value] * 255) / cumulative_hist[255]);
     }
-    /*if (i < rows && j < cols){
-        int index = i * cols + j;
-        output[index] = 160; 
-    
-    int x = threadIdx.x + blockIdx.x * blockDim.x;
-    int y = threadIdx.y + blockIdx.y * blockDim.y;
-
-    float scale = cdf[255];
-    while (y < rows) {
-        while (x < cols) {
-            int index = y * cols + x;
-            out[index] = 1;//static_cast<uchar>(255.0 * (cdf[data[index]] / scale));
-            x += blockDim.x * gridDim.x;
-        }
-        x = threadIdx.x + blockIdx.x * blockDim.x;
-        y += blockDim.y * gridDim.y;
-    }*/
-
-
+}
 
