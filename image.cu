@@ -1,46 +1,43 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <cuda.h>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
-//Provare anche l'approccio con la SM
-//Capire perché nella stampa le prime 350/370 posizioni sono  1 e poi il resto no, dopo capire perché equalized sembra già inizializzato
-
-/*dim3 nThreadPerBlocco(16,16);
-    dim3 nBlocks((gpu_resizedImage.cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x, (gpu_resizedImage.rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y);*/
-
-    
+//Mettere l'istogramma cumulativo nella SM, quindi provare entrambi gli approcci.
+//Scrivere i tempi su una tabella magari grafica.
+//trovre un numero di thread ottimale
+//migliorare la formula dell'equalizzazione.
 
 
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
 cv::Mat cpu_equalization(cv::Mat, int*, float*);
 void calcCumHist(cv::Mat, int*);
-cv::Mat cpu_HoughTransformLine(cv::Mat, float *); //da vedere perché ritorna un output tutto nero. 
+cv::Mat cpu_HoughTransformLine(cv::Mat, float *); 
 
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat, cudaEvent_t*, float&);
 cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size, cudaEvent_t*, float&);
 cv::cuda::GpuMat equalizeHistOnGPU(cv::cuda::GpuMat, cv::Mat);
-__global__ void equalizeHistCUDA(uchar*, uchar*,float* , int, int);
+__global__ void equalizeHistCUDA(unsigned char*, unsigned char*,int* , int, int);
 
 
 
 
-int main(int argn, char *argv[]) {
+int main(int argn, char *argv[]){
     //Variables
     cv::Mat cpu_grayscaleImage, cpu_resizedImage, cpu_equalizedImage;
-    cv::cuda::GpuMat gpuImage, gpu_grayscaleImage, gpu_resizedImage, gpu_Hist ;
+    cv::cuda::GpuMat gpuImage, gpu_grayscaleImage, gpu_resizedImage;
     int cumHist[256]={0};
-    dim3 threadsBlock(16,16), numBlocks; 
+    int *cumHist_device;
+    dim3 nThreadPerBlocco, numBlocks;
     cudaEvent_t timer[2];
     float GPUelapsedTime, CPUelapsedTime;
     cv::Size size(600,600);
-
-
 
     //Read the input image
     cv::Mat input = cv::imread("foto.jpg");
@@ -49,7 +46,6 @@ int main(int argn, char *argv[]) {
         fprintf(stderr, "Unable to load image\n");
         return -1;
     }
-
 
     //Loading of the image from the cpu to gpu
     gpuImage.upload(input);
@@ -71,18 +67,46 @@ int main(int argn, char *argv[]) {
     printf("[Resize] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
     //Resize on GPU
-    gpu_resizedImage= gpu_resizeImage(gpu_grayscaleImage,size, timer, GPUelapsedTime);
+    gpu_resizedImage = gpu_resizeImage(gpu_grayscaleImage,size, timer, GPUelapsedTime);
     printf("[Resize] Execution time on GPU: %f msec\n", GPUelapsedTime);
-
+    
     //CPU Equalization by myself 
     calcCumHist(cpu_resizedImage,cumHist);
     cpu_equalizedImage = cpu_equalization(cpu_resizedImage,cumHist,&CPUelapsedTime);
     printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
-    cv::imwrite("test.jpg",cpu_equalizedImage);
 
 
+    //Equalization on GPU
+    //Mem. allocation on GPU for cumHist
+    cudaMalloc((void**)&cumHist_device,256*sizeof(int));
+    cudaMemcpy(cumHist_device, cumHist, 256*sizeof(int), cudaMemcpyHostToDevice);
+
+
+    nThreadPerBlocco = dim3(4, 3);
+    numBlocks.y = gpu_resizedImage.rows / nThreadPerBlocco.y + ((gpu_resizedImage.rows % nThreadPerBlocco.y) == 0 ? 0 : 1);
+    numBlocks.x = gpu_resizedImage.cols / nThreadPerBlocco.x + ((gpu_resizedImage.cols % nThreadPerBlocco.x) == 0 ? 0 : 1);
     
+    cv::cuda::GpuMat gpu_equalizedImage = cv::cuda::createContinuous(600,600,CV_8UC1);
     
+    //Timer's start
+    cudaEventRecord(timer[0], 0);
+    equalizeHistCUDA<<<numBlocks,nThreadPerBlocco>>>(gpu_resizedImage.data,gpu_equalizedImage.data,cumHist_device,gpu_resizedImage.cols,gpu_resizedImage.rows);
+    cudaDeviceSynchronize();
+    //Timer's end
+    cudaEventRecord(timer[1], 0);
+    cudaEventSynchronize(timer[1]);
+    //Elapsed time calculation
+    cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
+    printf("[Equalization] Execution time on GPU: %f msec\n", GPUelapsedTime);
+    cudaError_t cudaErr = cudaGetLastError();
+    if (cudaErr != cudaSuccess)
+        fprintf(stderr, "Errore CUDA: %s\n", cudaGetErrorString(cudaErr));
+
+    cv::Mat img;
+    gpu_equalizedImage.download(img);
+    cv::imwrite("Equalized by myself.jpg", img);
+    
+
     //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
     //But to avoid any problem I do it manually.
     cpu_grayscaleImage.release();
@@ -91,8 +115,8 @@ int main(int argn, char *argv[]) {
     gpuImage.release();
     gpu_grayscaleImage.release();
     gpu_resizedImage.release();
-    gpu_Hist.release();
-    gpu_Hist.release();
+    gpu_equalizedImage.release();
+    cudaFree(cumHist_device);
     cudaEventDestroy(timer[0]);
     cudaEventDestroy(timer[1]);
     return 0;
@@ -127,7 +151,6 @@ cv::Mat cpu_equalization(cv::Mat image,int *cumulative_hist, float *elapsedTime)
     uchar pixel_value;
     clock_gettime(CLOCK_MONOTONIC, &start_time);
     //Equalization
-    
     for (int i =0; i<image.rows; i++){
         for(int j = 0; j<image.cols; j++){
             pixel_value = image.at<uchar>(i,j);
@@ -198,7 +221,7 @@ cv::Mat cpu_HoughTransformLine(cv::Mat image, float *elapsedTime){
 
 //Converting RGB to Grayscale using OpenCV for CUDA (GPU)
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat gpuImage, cudaEvent_t* timer, float& elapsedTime){
-    cv::cuda::GpuMat out;
+    cv::cuda::GpuMat out = cv::cuda::createContinuous(gpuImage.size(),gpuImage.type());
     //Timer's start
     cudaEventRecord(timer[0], 0);
     //BGR to Grayscale
@@ -213,12 +236,12 @@ cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat gpuImage, cudaEvent_t* time
 }
 
 //Resize of the image using OpenCV for CUDA (GPU)
-cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaEvent_t* timer, float& elapsedTime){
+cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size outputSize, cudaEvent_t* timer, float& elapsedTime){
 
-    cv::cuda::GpuMat out;
+    cv::cuda::GpuMat out = cv::cuda::createContinuous(outputSize,gpuImage.type());
     //Timer's start
     cudaEventRecord(timer[0], 0);
-    cv::cuda::resize(gpuImage, out, size);
+    cv::cuda::resize(gpuImage, out, outputSize);
     //Timer's end
     cudaEventRecord(timer[1], 0);
     cudaEventSynchronize(timer[1]);
@@ -227,21 +250,13 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size size, cudaE
     return out;
 }
 
-__global__ void equalizeHistCUDA(uchar* data, uchar* out, float* cdf, int cols, int rows) {
-    /*
-    int x = threadIdx.x + blockIdx.x * blockDim.x;
-    int y = threadIdx.y + blockIdx.y * blockDim.y;
 
-    float scale = cdf[255];
-    while (y < rows) {
-        while (x < cols) {
-            int index = y * cols + x;
-            out[index] = 1;//static_cast<uchar>(255.0 * (cdf[data[index]] / scale));
-            x += blockDim.x * gridDim.x;
-        }
-        x = threadIdx.x + blockIdx.x * blockDim.x;
-        y += blockDim.y * gridDim.y;
-    }*/
-} 
-
-
+__global__ void equalizeHistCUDA(unsigned char* input, unsigned char* output, int *cumulative_hist, int cols, int rows) {
+    int nGrayLevels = 256, area = cols*rows;
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < rows && j < cols){
+        int pixelValue = input[i * cols + j];
+        output[i * cols + j] = static_cast<uchar>((static_cast<double>(nGrayLevels) / area) * cumulative_hist[pixelValue]);
+    }
+}
