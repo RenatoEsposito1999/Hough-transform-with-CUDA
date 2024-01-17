@@ -8,26 +8,23 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
-//Mettere l'istogramma cumulativo nella SM, quindi provare entrambi gli approcci.
+//Inserire anche l'equalizazzione usando le chiamate della libreria cuda e di opencv
+//Capire se la routine openCV x CUDA usa la SM.
 //Scrivere i tempi su una tabella magari grafica.
-//trovre un numero di thread ottimale
-//migliorare la formula dell'equalizzazione.
 
+void calcCumHist(cv::Mat, int*);
+void CalcCudaGrid(dim3&, dim3&, int, int);
 
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
 cv::Mat cpu_equalization(cv::Mat, int*, float*);
-void calcCumHist(cv::Mat, int*);
 cv::Mat cpu_HoughTransformLine(cv::Mat, float *); 
 
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat, cudaEvent_t*, float&);
 cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size, cudaEvent_t*, float&);
 cv::cuda::GpuMat equalizeHistOnGPU(cv::cuda::GpuMat, cv::Mat);
 __global__ void equalizeHistCUDA(unsigned char*, unsigned char*,int* , int, int);
-
-
-
-
+__global__ void equalizeHistCUDASM(unsigned char*, unsigned char*, int *, int , int ) ;
 int main(int argn, char *argv[]){
     //Variables
     cv::Mat cpu_grayscaleImage, cpu_resizedImage, cpu_equalizedImage;
@@ -49,10 +46,14 @@ int main(int argn, char *argv[]){
 
     //Loading of the image from the cpu to gpu
     gpuImage.upload(input);
+
+    //Kernel settings
+    CalcCudaGrid(numBlocks,nThreadPerBlocco, size.height,size.width);
+    printf("\t***Kernel settings***:\nNumber of blocks: %dx%d\tNumber of threads x bloc: %dx%d\n",numBlocks.y,numBlocks.x,nThreadPerBlocco.y, nThreadPerBlocco.x);
+
     //Timer Evenet creation
     cudaEventCreate(&timer[0]);
     cudaEventCreate(&timer[1]);
-    
     
     //RGB to Grayscale function (CPU)
     cpu_grayscaleImage = cpu_RGBtoGRAYSCALE(input, &CPUelapsedTime);
@@ -75,40 +76,64 @@ int main(int argn, char *argv[]){
     cpu_equalizedImage = cpu_equalization(cpu_resizedImage,cumHist,&CPUelapsedTime);
     printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
+//Equalization on GPU - NO SM
 
-    //Equalization on GPU
     //Mem. allocation on GPU for cumHist
     cudaMalloc((void**)&cumHist_device,256*sizeof(int));
     cudaMemcpy(cumHist_device, cumHist, 256*sizeof(int), cudaMemcpyHostToDevice);
 
-
-    nThreadPerBlocco = dim3(4, 3);
-    numBlocks.y = gpu_resizedImage.rows / nThreadPerBlocco.y + ((gpu_resizedImage.rows % nThreadPerBlocco.y) == 0 ? 0 : 1);
-    numBlocks.x = gpu_resizedImage.cols / nThreadPerBlocco.x + ((gpu_resizedImage.cols % nThreadPerBlocco.x) == 0 ? 0 : 1);
-    
-    cv::cuda::GpuMat gpu_equalizedImage = cv::cuda::createContinuous(600,600,CV_8UC1);
+    cv::cuda::GpuMat gpu_equalizedImage = cv::cuda::createContinuous(gpu_resizedImage.rows,gpu_resizedImage.cols,CV_8UC1);
     
     //Timer's start
     cudaEventRecord(timer[0], 0);
+
     equalizeHistCUDA<<<numBlocks,nThreadPerBlocco>>>(gpu_resizedImage.data,gpu_equalizedImage.data,cumHist_device,gpu_resizedImage.cols,gpu_resizedImage.rows);
+    cudaError_t cudaErr = cudaGetLastError();
+    if (cudaErr != cudaSuccess)
+        fprintf(stderr, "CUDA Error: %s\n", cudaGetErrorString(cudaErr));
+
+
     cudaDeviceSynchronize();
     //Timer's end
     cudaEventRecord(timer[1], 0);
     cudaEventSynchronize(timer[1]);
     //Elapsed time calculation
     cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
-    printf("[Equalization] Execution time on GPU: %f msec\n", GPUelapsedTime);
-    cudaError_t cudaErr = cudaGetLastError();
-    if (cudaErr != cudaSuccess)
-        fprintf(stderr, "Errore CUDA: %s\n", cudaGetErrorString(cudaErr));
-
+    printf("[Equalization without SM] Execution time on GPU: %f msec\n", GPUelapsedTime);
+    
     cv::Mat img;
     gpu_equalizedImage.download(img);
-    cv::imwrite("Equalized by myself.jpg", img);
+    cv::imwrite("EqualizedWithoutSM.jpg", img);
     
+// END Equalization - NO SM
 
-    //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
-    //But to avoid any problem I do it manually.
+//Start Equalization with SM
+    
+    cv::cuda::GpuMat gpu_equalizedImageSM = cv::cuda::createContinuous(gpu_resizedImage.rows,gpu_resizedImage.cols,CV_8UC1);
+    
+    //Timer's start
+    cudaEventRecord(timer[0], 0);
+    equalizeHistCUDASM<<<numBlocks,nThreadPerBlocco>>>(gpu_resizedImage.data,gpu_equalizedImageSM.data,cumHist_device,gpu_resizedImage.cols,gpu_resizedImage.rows);
+    cudaErr = cudaGetLastError();
+    if (cudaErr != cudaSuccess)
+        fprintf(stderr, "CUDA Error: %s\n", cudaGetErrorString(cudaErr));
+    cudaThreadSynchronize();
+    //Timer's end
+    cudaEventRecord(timer[1], 0);
+    cudaEventSynchronize(timer[1]);
+    //Elapsed time calculation
+    cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
+    printf("[Equalization with SM] Execution time on GPU: %f msec\n", GPUelapsedTime);
+
+    cv::Mat SM;
+    gpu_equalizedImageSM.download(SM);
+    cv::imwrite("EqualizedWithSM.jpg", SM);
+    
+//END Equalization with SM
+
+
+//The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
+//But to avoid any problem I do it manually.
     cpu_grayscaleImage.release();
     cpu_resizedImage.release();
     cpu_equalizedImage.release();
@@ -250,13 +275,57 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size outputSize,
     return out;
 }
 
+void CalcCudaGrid(dim3 &numBlocks, dim3 &nThreadPerBlocco, int rows, int cols){
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);  // 0 device's index
+    //Max thread's num. x block of the gpu
+    int maxThreadsPerBlock = prop.maxThreadsPerBlock;
+    nThreadPerBlocco.x = min(cols, int(sqrt(maxThreadsPerBlock)));  // Max for x
+    nThreadPerBlocco.y = min(rows, maxThreadsPerBlock / nThreadPerBlocco.x);  // Max for y
+    numBlocks.x = (cols + nThreadPerBlocco.x - 1) / nThreadPerBlocco.x;
+    numBlocks.y = (rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y;
+}
 
 __global__ void equalizeHistCUDA(unsigned char* input, unsigned char* output, int *cumulative_hist, int cols, int rows) {
     int nGrayLevels = 256, area = cols*rows;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < rows && j < cols){
-        int pixelValue = input[i * cols + j];
-        output[i * cols + j] = static_cast<uchar>((static_cast<double>(nGrayLevels) / area) * cumulative_hist[pixelValue]);
+        int index = i * cols + j;
+        int pixelValue = input[index];
+        output[index] = static_cast<uchar>((static_cast<double>(nGrayLevels) / area) * cumulative_hist[pixelValue]);
     }
 }
+
+__global__ void equalizeHistCUDASM(unsigned char* input, unsigned char* output, int *cumulative_hist, int cols, int rows) {
+    int nGrayLevels = 256, area = cols * rows;
+    __shared__ int shared_cumulative_hist[256];
+    int elements_per_thread = ( 256/(blockDim.x*blockDim.y) > 1 ) ? (256/blockDim.x*blockDim.y) : 1;
+    int InBlockThreadID = threadIdx.x + blockDim.x * threadIdx.y; //from 0 to 1023 x block of 32x32 threads
+    int start_index = InBlockThreadID * elements_per_thread;
+    for (int i = 0; i < elements_per_thread; i++) {
+        int index = start_index + i;
+        if (index < 256)
+            shared_cumulative_hist[index] = cumulative_hist[index];
+    }
+    __syncthreads();
+
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < rows && j < cols) {
+        int index = i * cols + j;
+        int pixelValue = input[index];
+        output[index] = static_cast<unsigned char>((static_cast<double>(nGrayLevels) / area) * shared_cumulative_hist[pixelValue]);
+    }
+}
+
+//SOLUZIONe:
+// Un solo thread per blocco carica i dati nella shared memory
+/*for (int i = threadIdx.x; i < 256; i += blockDim.x) {
+shared_cumulative_hist[i] = cumulative_hist[i];
+}
+Oppure
+//int elements_per_thread = 256 / (blockDim.x * blockDim.y);
+    //int start_index = (blockIdx.x * blockDim.x + threadIdx.x) * elements_per_thread;
+*/
+
