@@ -8,12 +8,14 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
-//Inserire anche l'equalizazzione usando le chiamate della libreria cuda e di opencv
+// Provare ad aggiungere il calcolo dell'istogramma sulla GPU.
 //Capire se la routine openCV x CUDA usa la SM.
 //Scrivere i tempi su una tabella magari grafica.
 
+
 void calcCumHist(cv::Mat, int*);
 void CalcCudaGrid(dim3&, dim3&, int, int);
+void EqualizationByRoutine(cv::cuda::GpuMat, cv::Mat, cudaEvent_t*, float&, float *);
 
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
@@ -34,7 +36,7 @@ int main(int argn, char *argv[]){
     dim3 nThreadPerBlocco, numBlocks;
     cudaEvent_t timer[2];
     float GPUelapsedTime, CPUelapsedTime;
-    cv::Size size(600,600);
+    cv::Size size(300,300);
 
     //Read the input image
     cv::Mat input = cv::imread("foto.jpg");
@@ -70,11 +72,18 @@ int main(int argn, char *argv[]){
     //Resize on GPU
     gpu_resizedImage = gpu_resizeImage(gpu_grayscaleImage,size, timer, GPUelapsedTime);
     printf("[Resize] Execution time on GPU: %f msec\n", GPUelapsedTime);
+
+    printf("\t***Warning***:\nThe Cuda and OpenCV functions for equalization also calculate the histogram so the times are also influenced by this calculation.\nThe functions that I implemented use a ready-made histogram so the time is without histogram calculation.\n");
+    //CPU Equalization by OpenCV and Cuda
+    EqualizationByRoutine(gpu_resizedImage,cpu_resizedImage, timer,GPUelapsedTime, &CPUelapsedTime);
+    printf("[Equalization by OpenCV] Execution time on CPU: %f msec\n[Equalization by Cuda] Execution time on GPU: %f msec\n", CPUelapsedTime, GPUelapsedTime);
+
+
     
     //CPU Equalization by myself 
     calcCumHist(cpu_resizedImage,cumHist);
     cpu_equalizedImage = cpu_equalization(cpu_resizedImage,cumHist,&CPUelapsedTime);
-    printf("[Equalization] Execution time on CPU: %f msec\n", CPUelapsedTime);
+    printf("[Equalization by myself] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
 //Equalization on GPU - NO SM
 
@@ -99,7 +108,7 @@ int main(int argn, char *argv[]){
     cudaEventSynchronize(timer[1]);
     //Elapsed time calculation
     cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
-    printf("[Equalization without SM] Execution time on GPU: %f msec\n", GPUelapsedTime);
+    printf("[Equalization without SM by myself] Execution time on GPU: %f msec\n", GPUelapsedTime);
     
     cv::Mat img;
     gpu_equalizedImage.download(img);
@@ -123,12 +132,12 @@ int main(int argn, char *argv[]){
     cudaEventSynchronize(timer[1]);
     //Elapsed time calculation
     cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
-    printf("[Equalization with SM] Execution time on GPU: %f msec\n", GPUelapsedTime);
+    printf("[Equalization with SM by myself] Execution time on GPU: %f msec\n", GPUelapsedTime);
 
     cv::Mat SM;
     gpu_equalizedImageSM.download(SM);
     cv::imwrite("EqualizedWithSM.jpg", SM);
-    
+
 //END Equalization with SM
 
 
@@ -147,6 +156,27 @@ int main(int argn, char *argv[]){
     return 0;
 }
 
+//Equalization by Cuda and OpenCV routines
+void EqualizationByRoutine(cv::cuda::GpuMat gpuImg, cv::Mat cpuImg, cudaEvent_t* timer, float& GPUelapsedTime, float *CPUelapsedTime){
+    //CPU
+    struct timespec start_time, end_time;
+    cv::Mat opencvEqualizedImg;
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
+    cv::equalizeHist(cpuImg, opencvEqualizedImg);
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    *CPUelapsedTime = (end_time.tv_sec - start_time.tv_sec) * 1000.0 + (end_time.tv_nsec - start_time.tv_nsec) / 1000000.0;
+    
+    //GPU
+    cv::cuda::GpuMat gpuEqualizedImage;
+    //Timer's start
+    cudaEventRecord(timer[0], 0);
+    cv::cuda::equalizeHist(gpuImg, gpuEqualizedImage);
+    //Timer's end
+    cudaEventRecord(timer[1], 0);
+    cudaEventSynchronize(timer[1]);
+    //Elapsed time calculation
+    cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
+}
 
 //Cumulative Histogram computation
 void calcCumHist(cv::Mat image, int *cumHist){
@@ -318,14 +348,3 @@ __global__ void equalizeHistCUDASM(unsigned char* input, unsigned char* output, 
         output[index] = static_cast<unsigned char>((static_cast<double>(nGrayLevels) / area) * shared_cumulative_hist[pixelValue]);
     }
 }
-
-//SOLUZIONe:
-// Un solo thread per blocco carica i dati nella shared memory
-/*for (int i = threadIdx.x; i < 256; i += blockDim.x) {
-shared_cumulative_hist[i] = cumulative_hist[i];
-}
-Oppure
-//int elements_per_thread = 256 / (blockDim.x * blockDim.y);
-    //int start_index = (blockIdx.x * blockDim.x + threadIdx.x) * elements_per_thread;
-*/
-
