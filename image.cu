@@ -12,7 +12,7 @@
 void calcCumHist(cv::Mat, int*);
 void CalcCudaGrid(dim3&, dim3&, int, int);
 void EqualizationByRoutine(cv::cuda::GpuMat, cv::Mat, cudaEvent_t*, float&, float *);
-
+void writeToFile(FILE*, const char*, float, float) ;
 std::vector<cv::Vec2f> fromIMGtoVec2f(cv::Mat);
 
 cv::Mat DrawLines(cv::Mat, std::vector<cv::Vec2f>);
@@ -38,6 +38,25 @@ int main(int argn, char *argv[]){
     float GPUelapsedTime, CPUelapsedTime;
     cv::Size size(600,600);
 
+    //Performance files
+    FILE *file = fopen("Performance.txt", "wb");
+
+    //
+    if (file == NULL) {
+        fprintf(stderr, "Error: impossible to open.\n");
+        return 1;
+    }
+
+    //Kernel settings
+    CalcCudaGrid(numBlocks,nThreadPerBlocco, size.height,size.width);
+    
+    //Header
+    fprintf(file, "\t***Kernel settings***:\nNumber of blocks: %dx%d\nNumber of threads x blocks: %dx%d.\n",numBlocks.y,numBlocks.x,nThreadPerBlocco.y, nThreadPerBlocco.x);
+
+    fprintf(file,"\t***Warning***:\nThe Cuda and OpenCV functions for equalization also calculate the histogram so the times are also influenced by this calculation.\nThe functions that I implemented use a ready-made histogram so the time is without histogram calculation.\n\n\n");
+
+    fprintf(file, "%-60s %-20s %-20s\n", "Action", "CPU Time (msec)", "GPU Time (msec)");
+
     //Read the input image
     cv::Mat input = cv::imread("foto.jpg");
 
@@ -49,41 +68,32 @@ int main(int argn, char *argv[]){
     //Loading of the image from the cpu to gpu
     gpuImage.upload(input);
 
-    //Kernel settings
-    CalcCudaGrid(numBlocks,nThreadPerBlocco, size.height,size.width);
-    printf("\t***Kernel settings***:\nNumber of blocks: %dx%d\tNumber of threads x bloc: %dx%d\n",numBlocks.y,numBlocks.x,nThreadPerBlocco.y, nThreadPerBlocco.x);
-
     //Timer Evenet creation
     cudaEventCreate(&timer[0]);
     cudaEventCreate(&timer[1]);
     
     //RGB to Grayscale function (CPU)
     cpu_grayscaleImage = cpu_RGBtoGRAYSCALE(input, &CPUelapsedTime);
-    printf("[RGB to Grayscale] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
     //RGB to Grayscale function (GPU)
     gpu_grayscaleImage = gpu_RGBtoGRAYSCALE(gpuImage, timer, GPUelapsedTime);
-    printf("[RGB to Grayscale] Execution time on GPU: %f msec\n", GPUelapsedTime);
-
+    writeToFile(file, "RGB to Grayscale", CPUelapsedTime,GPUelapsedTime);
     //Resize on CPU with CPU image as input
     cpu_resizedImage=cpu_resizeImage(cpu_grayscaleImage,size, &CPUelapsedTime);
-    printf("[Resize] Execution time on CPU: %f msec\n", CPUelapsedTime);
 
     //Resize on GPU
     gpu_resizedImage = gpu_resizeImage(gpu_grayscaleImage,size, timer, GPUelapsedTime);
-    printf("[Resize] Execution time on GPU: %f msec\n", GPUelapsedTime);
+    writeToFile(file, "Resize", CPUelapsedTime,GPUelapsedTime);
 
-    printf("\t***Warning***:\nThe Cuda and OpenCV functions for equalization also calculate the histogram so the times are also influenced by this calculation.\nThe functions that I implemented use a ready-made histogram so the time is without histogram calculation.\n");
     //CPU Equalization by OpenCV and Cuda
     EqualizationByRoutine(gpu_resizedImage,cpu_resizedImage, timer,GPUelapsedTime, &CPUelapsedTime);
-    printf("[Equalization by OpenCV] Execution time on CPU: %f msec\n[Equalization by Cuda] Execution time on GPU: %f msec\n", CPUelapsedTime, GPUelapsedTime);
 
+    writeToFile(file, "Equalization using OpenCV and Cuda routines", CPUelapsedTime,GPUelapsedTime);
 
-    
     //CPU Equalization by myself 
     calcCumHist(cpu_resizedImage,cumHist);
     cpu_equalizedImage = cpu_equalization(cpu_resizedImage,cumHist,&CPUelapsedTime);
-    printf("[Equalization by myself] Execution time on CPU: %f msec\n", CPUelapsedTime);
+    writeToFile(file, "Equalization on CPU by myself", CPUelapsedTime,0);
 
 //Equalization on GPU - NO SM
 
@@ -101,19 +111,14 @@ int main(int argn, char *argv[]){
     if (cudaErr != cudaSuccess)
         fprintf(stderr, "CUDA Error: %s\n", cudaGetErrorString(cudaErr));
 
-
     cudaDeviceSynchronize();
     //Timer's end
     cudaEventRecord(timer[1], 0);
     cudaEventSynchronize(timer[1]);
     //Elapsed time calculation
     cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
-    printf("[Equalization without SM by myself] Execution time on GPU: %f msec\n", GPUelapsedTime);
-    
-    //cv::Mat img;
-    //gpu_equalizedImage.download(img);
-    //cv::imwrite("EqualizedWithoutSM.jpg", img);
-    
+    writeToFile(file, "Equalization on GPU without SM by myself",0,GPUelapsedTime);
+
 // END Equalization - NO SM
 
 //Start Equalization with SM
@@ -132,24 +137,24 @@ int main(int argn, char *argv[]){
     cudaEventSynchronize(timer[1]);
     //Elapsed time calculation
     cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
-    printf("[Equalization with SM by myself] Execution time on GPU: %f msec\n", GPUelapsedTime);
+    writeToFile(file, "Equalization on GPU with SM by myself",0,GPUelapsedTime);
 
 //END Equalization with SM
 
     //Hough on CPU
     cv::Mat cpu_Hough;
     cpu_Hough = cpu_HoughTransformLine(cpu_equalizedImage, &CPUelapsedTime);
-    printf("[Hough Transform Line] Execution time on CPU: %f msec\n", CPUelapsedTime);
     cv::imwrite("CPU Hough.jpg", cpu_Hough);
 
     //Hough on GPU
     cv::Mat gpu_Hough;
     gpu_Hough = GPU_HoughTransformLine(gpu_equalizedImage,timer,GPUelapsedTime);
-    printf("[Hough Transform Line] Execution time on GPU: %f msec\n", GPUelapsedTime);
     cv::imwrite("GPU Hough.jpg", gpu_Hough);
+    writeToFile(file, "Hough transform for lines",CPUelapsedTime,GPUelapsedTime);
 
-//The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
-//But to avoid any problem I do it manually.
+
+    //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
+    //But to avoid any problem I do it manually.
     cpu_grayscaleImage.release();
     cpu_resizedImage.release();
     cpu_equalizedImage.release();
@@ -163,7 +168,20 @@ int main(int argn, char *argv[]){
     cudaFree(cumHist_device);
     cudaEventDestroy(timer[0]);
     cudaEventDestroy(timer[1]);
+    fclose(file);
     return 0;
+}
+
+void writeToFile(FILE *file, const char *string, float CPUTime, float GPUTime) {
+    if (file == NULL) {
+        fprintf(stderr, "File Error.\n");
+        return;
+    }
+
+    fprintf(file, "%-60s", string);
+    fprintf(file, "%-20f", CPUTime);
+    fprintf(file, "%-20f", GPUTime);
+    fprintf(file, "\n");
 }
 
 //Convert an image to a Vec2f
@@ -239,9 +257,7 @@ cv::Mat DrawLines(cv::Mat originalImage, std::vector<cv::Vec2f> lines){
         cv::Point pt2(cvRound(x0 - 1000 * (-b)), cvRound(y0 - 1000 * (a)));
         cv::line(output, pt1, pt2, cv::Scalar(0), 3);
     }
-
     return output;
-    
 }
 
 //Histogram equalization on CPU
