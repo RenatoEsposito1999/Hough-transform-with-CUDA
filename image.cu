@@ -8,10 +8,7 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
-// Provare ad aggiungere il calcolo dell'istogramma sulla GPU.
-//Capire se la routine openCV x CUDA usa la SM.
 //Scrivere i tempi su una tabella magari grafica.
-
 
 void calcCumHist(cv::Mat, int*);
 void CalcCudaGrid(dim3&, dim3&, int, int);
@@ -20,7 +17,7 @@ void EqualizationByRoutine(cv::cuda::GpuMat, cv::Mat, cudaEvent_t*, float&, floa
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
 cv::Mat cpu_equalization(cv::Mat, int*, float*);
-cv::Mat cpu_HoughTransformLine(cv::Mat, float *); 
+cv::Mat cpu_HoughTransformLine(cv::Mat ,float *); 
 
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat, cudaEvent_t*, float&);
 cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size, cudaEvent_t*, float&);
@@ -36,7 +33,7 @@ int main(int argn, char *argv[]){
     dim3 nThreadPerBlocco, numBlocks;
     cudaEvent_t timer[2];
     float GPUelapsedTime, CPUelapsedTime;
-    cv::Size size(300,300);
+    cv::Size size(600,600);
 
     //Read the input image
     cv::Mat input = cv::imread("foto.jpg");
@@ -110,9 +107,9 @@ int main(int argn, char *argv[]){
     cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
     printf("[Equalization without SM by myself] Execution time on GPU: %f msec\n", GPUelapsedTime);
     
-    cv::Mat img;
-    gpu_equalizedImage.download(img);
-    cv::imwrite("EqualizedWithoutSM.jpg", img);
+    //cv::Mat img;
+    //gpu_equalizedImage.download(img);
+    //cv::imwrite("EqualizedWithoutSM.jpg", img);
     
 // END Equalization - NO SM
 
@@ -134,22 +131,28 @@ int main(int argn, char *argv[]){
     cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
     printf("[Equalization with SM by myself] Execution time on GPU: %f msec\n", GPUelapsedTime);
 
-    cv::Mat SM;
-    gpu_equalizedImageSM.download(SM);
-    cv::imwrite("EqualizedWithSM.jpg", SM);
+    //cv::Mat SM;
+    //gpu_equalizedImageSM.download(SM);
+    //cv::imwrite("EqualizedWithSM.jpg", SM);
 
 //END Equalization with SM
 
-
+    //Hough on CPU
+    cv::Mat cpu_Hough;
+    cpu_Hough = cpu_HoughTransformLine(cpu_equalizedImage, &CPUelapsedTime);
+    printf("[Hough Transform Line] Execution time on CPU: %f msec\n", CPUelapsedTime);
+    cv::imwrite("Hough.jpg", cpu_Hough);
 //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
 //But to avoid any problem I do it manually.
     cpu_grayscaleImage.release();
     cpu_resizedImage.release();
     cpu_equalizedImage.release();
+    cpu_Hough.release();
     gpuImage.release();
     gpu_grayscaleImage.release();
     gpu_resizedImage.release();
     gpu_equalizedImage.release();
+    gpu_equalizedImageSM.release();
     cudaFree(cumHist_device);
     cudaEventDestroy(timer[0]);
     cudaEventDestroy(timer[1]);
@@ -243,32 +246,29 @@ cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat in, float *elapsedTime){
 }
 
 //HoughTransform for line
-cv::Mat cpu_HoughTransformLine(cv::Mat image, float *elapsedTime){
+cv::Mat cpu_HoughTransformLine(cv::Mat input, float *elapsedTime){
     struct timespec start_time, end_time;
-    cv::Mat output=image.clone();
-
-    std::vector<cv::Vec2f> lines;  // Vector for lines feature
-
     clock_gettime(CLOCK_MONOTONIC, &start_time);
-    cv::HoughLines(image, lines, 1, CV_PI / 180, 100);
-
-    for (size_t i = 0; i < lines.size(); ++i) {
+    cv::Mat gass, can;
+    //Clean the image of any noise so as to reduce it the problem of spurious votes
+    cv::GaussianBlur(input, gass, cv::Size(5, 5), 0, 0);
+	
+   //Perform Canny so as to return the edge points of the image
+    Canny(gass, can, 80, 140);
+    std::vector<cv::Vec2f> lines;
+    cv::HoughLines(can, lines, 1, CV_PI / 180, 147);
+    //Draws the detected lines on the original image
+    cv::Mat output = input.clone();
+    for (int i = 0; i<lines.size(); i++) {
         float rho = lines[i][0];
         float theta = lines[i][1];
-        cv::Point pt1, pt2;
-
-        double a = cos(theta);
-        double b = sin(theta);
-        double x0 = a * rho;
-        double y0 = b * rho;
-
-        pt1.x = cvRound(x0 + 1000 * (-b));
-        pt1.y = cvRound(y0 + 1000 * (a));
-        pt2.x = cvRound(x0 - 1000 * (-b));
-        pt2.y = cvRound(y0 - 1000 * (a));
-
-        cv::line(output, pt1, pt2, cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
+        double a = std::cos(theta), b = std::sin(theta);
+        double x0 = a * rho, y0 = b * rho;
+        cv::Point pt1(cvRound(x0 + 1000 * (-b)), cvRound(y0 + 1000 * (a)));
+        cv::Point pt2(cvRound(x0 - 1000 * (-b)), cvRound(y0 - 1000 * (a)));
+        cv::line(output, pt1, pt2, cv::Scalar(0), 3);
     }
+
     clock_gettime(CLOCK_MONOTONIC, &end_time);
     *elapsedTime = (end_time.tv_sec - start_time.tv_sec) * 1000.0 + (end_time.tv_nsec - start_time.tv_nsec) / 1000000.0;
     return output;
@@ -333,7 +333,7 @@ __global__ void equalizeHistCUDASM(unsigned char* input, unsigned char* output, 
     int elements_per_thread = ( 256/(blockDim.x*blockDim.y) > 1 ) ? (256/blockDim.x*blockDim.y) : 1;
     int InBlockThreadID = threadIdx.x + blockDim.x * threadIdx.y; //from 0 to 1023 x block of 32x32 threads
     int start_index = InBlockThreadID * elements_per_thread;
-    for (int i = 0; i < elements_per_thread; i++) {
+    for (int i = 0; i < elements_per_thread; i++){
         int index = start_index + i;
         if (index < 256)
             shared_cumulative_hist[index] = cumulative_hist[index];
@@ -348,3 +348,4 @@ __global__ void equalizeHistCUDASM(unsigned char* input, unsigned char* output, 
         output[index] = static_cast<unsigned char>((static_cast<double>(nGrayLevels) / area) * shared_cumulative_hist[pixelValue]);
     }
 }
+
