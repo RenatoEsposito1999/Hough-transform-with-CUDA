@@ -8,12 +8,14 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 #include <opencv2/highgui/highgui.hpp>
-//Scrivere i tempi su una tabella magari grafica.
 
 void calcCumHist(cv::Mat, int*);
 void CalcCudaGrid(dim3&, dim3&, int, int);
 void EqualizationByRoutine(cv::cuda::GpuMat, cv::Mat, cudaEvent_t*, float&, float *);
 
+std::vector<cv::Vec2f> fromIMGtoVec2f(cv::Mat);
+
+cv::Mat DrawLines(cv::Mat, std::vector<cv::Vec2f>);
 cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat, float*);
 cv::Mat cpu_resizeImage(cv::Mat,cv::Size, float*);
 cv::Mat cpu_equalization(cv::Mat, int*, float*);
@@ -21,9 +23,10 @@ cv::Mat cpu_HoughTransformLine(cv::Mat ,float *);
 
 cv::cuda::GpuMat gpu_RGBtoGRAYSCALE(cv::cuda::GpuMat, cudaEvent_t*, float&);
 cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat, cv::Size size, cudaEvent_t*, float&);
-cv::cuda::GpuMat equalizeHistOnGPU(cv::cuda::GpuMat, cv::Mat);
 __global__ void equalizeHistCUDA(unsigned char*, unsigned char*,int* , int, int);
-__global__ void equalizeHistCUDASM(unsigned char*, unsigned char*, int *, int , int ) ;
+__global__ void equalizeHistCUDASM(unsigned char*, unsigned char*, int *, int , int );
+cv::Mat GPU_HoughTransformLine(cv::cuda::GpuMat, cudaEvent_t*, float&); 
+
 int main(int argn, char *argv[]){
     //Variables
     cv::Mat cpu_grayscaleImage, cpu_resizedImage, cpu_equalizedImage;
@@ -131,23 +134,27 @@ int main(int argn, char *argv[]){
     cudaEventElapsedTime(&GPUelapsedTime, timer[0], timer[1]);
     printf("[Equalization with SM by myself] Execution time on GPU: %f msec\n", GPUelapsedTime);
 
-    //cv::Mat SM;
-    //gpu_equalizedImageSM.download(SM);
-    //cv::imwrite("EqualizedWithSM.jpg", SM);
-
 //END Equalization with SM
 
     //Hough on CPU
     cv::Mat cpu_Hough;
     cpu_Hough = cpu_HoughTransformLine(cpu_equalizedImage, &CPUelapsedTime);
     printf("[Hough Transform Line] Execution time on CPU: %f msec\n", CPUelapsedTime);
-    cv::imwrite("Hough.jpg", cpu_Hough);
+    cv::imwrite("CPU Hough.jpg", cpu_Hough);
+
+    //Hough on GPU
+    cv::Mat gpu_Hough;
+    gpu_Hough = GPU_HoughTransformLine(gpu_equalizedImage,timer,GPUelapsedTime);
+    printf("[Hough Transform Line] Execution time on GPU: %f msec\n", GPUelapsedTime);
+    cv::imwrite("GPU Hough.jpg", gpu_Hough);
+
 //The memory of cv::cuda::GpuMat and cv::Mat objects is automatically deallocated by the library.
 //But to avoid any problem I do it manually.
     cpu_grayscaleImage.release();
     cpu_resizedImage.release();
     cpu_equalizedImage.release();
     cpu_Hough.release();
+    gpu_Hough.release();
     gpuImage.release();
     gpu_grayscaleImage.release();
     gpu_resizedImage.release();
@@ -157,6 +164,26 @@ int main(int argn, char *argv[]){
     cudaEventDestroy(timer[0]);
     cudaEventDestroy(timer[1]);
     return 0;
+}
+
+//Convert an image to a Vec2f
+std::vector<cv::Vec2f> fromIMGtoVec2f(cv::Mat input){
+    std::vector<cv::Vec2f> h_lines;
+    if (input.rows == 2 && input.cols > 0) {
+        h_lines.resize(input.cols);
+        for (int i = 0; i < input.cols; ++i) {
+            h_lines[i] = input.at<cv::Vec2f>(0, i);
+        }
+    } else if (input.rows > 0 && input.cols == 2) {
+        h_lines.resize(input.rows);
+        for (int i = 0; i < input.rows; ++i) {
+            h_lines[i] = input.at<cv::Vec2f>(i, 0);
+        }
+    } else {
+        fprintf(stderr,"ERROR: Incorrect size\n");
+    }
+
+    return h_lines;
 }
 
 //Equalization by Cuda and OpenCV routines
@@ -200,6 +227,22 @@ void calcCumHist(cv::Mat image, int *cumHist){
     }
 }
 
+//Draws the detected lines on the original image
+cv::Mat DrawLines(cv::Mat originalImage, std::vector<cv::Vec2f> lines){
+    cv::Mat output = originalImage.clone();
+    for (int i = 0; i<lines.size(); i++) {
+        float rho = lines[i][0];
+        float theta = lines[i][1];
+        double a = std::cos(theta), b = std::sin(theta);
+        double x0 = a * rho, y0 = b * rho;
+        cv::Point pt1(cvRound(x0 + 1000 * (-b)), cvRound(y0 + 1000 * (a)));
+        cv::Point pt2(cvRound(x0 - 1000 * (-b)), cvRound(y0 - 1000 * (a)));
+        cv::line(output, pt1, pt2, cv::Scalar(0), 3);
+    }
+
+    return output;
+    
+}
 
 //Histogram equalization on CPU
 cv::Mat cpu_equalization(cv::Mat image,int *cumulative_hist, float *elapsedTime){
@@ -245,33 +288,26 @@ cv::Mat cpu_RGBtoGRAYSCALE(cv::Mat in, float *elapsedTime){
     return out;
 }
 
-//HoughTransform for line
+//HoughTransform for line on CPU
 cv::Mat cpu_HoughTransformLine(cv::Mat input, float *elapsedTime){
     struct timespec start_time, end_time;
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
     cv::Mat gass, can;
+    cv::Mat output = input.clone();
+    std::vector<cv::Vec2f> lines;
+
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
+    
     //Clean the image of any noise so as to reduce it the problem of spurious votes
     cv::GaussianBlur(input, gass, cv::Size(5, 5), 0, 0);
 	
    //Perform Canny so as to return the edge points of the image
-    Canny(gass, can, 80, 140);
-    std::vector<cv::Vec2f> lines;
+    cv::Canny(gass, can, 80, 140);
     cv::HoughLines(can, lines, 1, CV_PI / 180, 147);
-    //Draws the detected lines on the original image
-    cv::Mat output = input.clone();
-    for (int i = 0; i<lines.size(); i++) {
-        float rho = lines[i][0];
-        float theta = lines[i][1];
-        double a = std::cos(theta), b = std::sin(theta);
-        double x0 = a * rho, y0 = b * rho;
-        cv::Point pt1(cvRound(x0 + 1000 * (-b)), cvRound(y0 + 1000 * (a)));
-        cv::Point pt2(cvRound(x0 - 1000 * (-b)), cvRound(y0 - 1000 * (a)));
-        cv::line(output, pt1, pt2, cv::Scalar(0), 3);
-    }
 
     clock_gettime(CLOCK_MONOTONIC, &end_time);
     *elapsedTime = (end_time.tv_sec - start_time.tv_sec) * 1000.0 + (end_time.tv_nsec - start_time.tv_nsec) / 1000000.0;
-    return output;
+
+    return DrawLines(input,lines);
 }
 
 //Converting RGB to Grayscale using OpenCV for CUDA (GPU)
@@ -305,6 +341,7 @@ cv::cuda::GpuMat gpu_resizeImage(cv::cuda::GpuMat gpuImage, cv::Size outputSize,
     return out;
 }
 
+//Compute the kernel configuration
 void CalcCudaGrid(dim3 &numBlocks, dim3 &nThreadPerBlocco, int rows, int cols){
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);  // 0 device's index
@@ -316,6 +353,7 @@ void CalcCudaGrid(dim3 &numBlocks, dim3 &nThreadPerBlocco, int rows, int cols){
     numBlocks.y = (rows + nThreadPerBlocco.y - 1) / nThreadPerBlocco.y;
 }
 
+//CUDA Kernel code for SM-free equalization
 __global__ void equalizeHistCUDA(unsigned char* input, unsigned char* output, int *cumulative_hist, int cols, int rows) {
     int nGrayLevels = 256, area = cols*rows;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
@@ -327,6 +365,7 @@ __global__ void equalizeHistCUDA(unsigned char* input, unsigned char* output, in
     }
 }
 
+//CUDA Kernel code for equalization with SHARED MEMORY
 __global__ void equalizeHistCUDASM(unsigned char* input, unsigned char* output, int *cumulative_hist, int cols, int rows) {
     int nGrayLevels = 256, area = cols * rows;
     __shared__ int shared_cumulative_hist[256];
@@ -349,3 +388,32 @@ __global__ void equalizeHistCUDASM(unsigned char* input, unsigned char* output, 
     }
 }
 
+//HoughTransform for line on GPU
+cv::Mat GPU_HoughTransformLine(cv::cuda::GpuMat input, cudaEvent_t* timer, float&elapsedTime){
+    
+    cv::cuda::GpuMat gass, can, lines;
+    std::vector<cv::Vec2f> cpu_lines;
+    //Timer's start
+    cudaEventRecord(timer[0], 0);
+    cv::Ptr<cv::cuda::Filter> gaussianFilter = cv::cuda::createGaussianFilter(CV_8U, CV_8U, cv::Size(5,5),0);
+    gaussianFilter->apply(input,gass);
+
+    cv::Ptr<cv::cuda::CannyEdgeDetector> canny = cv::cuda::createCannyEdgeDetector(80, 140, 3, false);
+    canny->detect(gass, can);
+    
+    cv::Ptr<cv::cuda::HoughLinesDetector> hough = cv::cuda::createHoughLinesDetector(1.0, CV_PI / 180, 147);
+    hough->detect(can,lines);
+
+    //Timer's end
+    cudaEventRecord(timer[1], 0);
+    cudaEventSynchronize(timer[1]);
+    //Elapsed time calculation
+    cudaEventElapsedTime(&elapsedTime, timer[0], timer[1]);
+    cv::Mat tmp, img;
+    lines.download(tmp);
+    cpu_lines = fromIMGtoVec2f(tmp);
+    input.download(img);
+
+    //draws the lines contained in the vector inside the original image.
+    return DrawLines(img,cpu_lines);
+}
