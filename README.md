@@ -32,7 +32,4 @@ To run and test the code you will need:
 ## Contacts 🪪
 - [mail] renato [ dot ] esposito001 [ at ] studenti [ dot ] uniparthenope [ dot ] it (you can write to me in english or italian).
 
-## To do List
-- [ ] Write C code for histogram equalization.
-- [ ] Write Cuda kernel code for histogram equalization. 
-- [ ] Add Gaussian filter with both CPU and GPU.
+For more details, read the [report](./Peport.pdf).
