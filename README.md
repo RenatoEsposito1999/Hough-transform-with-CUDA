@@ -32,4 +32,4 @@ To run and test the code you will need:
 ## Contacts 🪪
 - [mail] renato [ dot ] esposito001 [ at ] studenti [ dot ] uniparthenope [ dot ] it (you can write to me in english or italian).
 
-For more details, read the [report](./Peport.pdf).
+For more details, read the [report](./Report.pdf).
